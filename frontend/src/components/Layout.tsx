@@ -49,7 +49,7 @@ const TITLES: Record<string, string> = {
   '/plans': 'Plans',
   '/payments': 'Payments',
   '/profitability': 'Profitability',
-  '/reminders': 'Reminders',
+  '/reminders': 'Reminders & access',
   '/settings': 'Settings',
 };
 

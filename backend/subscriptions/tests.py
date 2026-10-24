@@ -7,10 +7,11 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from .models import AppSettings, Payment, Plan, ReminderLog, Subscriber, UsageSnapshot
+from .models import AccessEvent, AppSettings, Payment, Plan, ReminderLog, Subscriber, UsageSnapshot
 from .services import reminders as reminder_service
 from .services.profitability import compute_profitability
-from .services.status import ACTIVE, DUE_SOON, OVERDUE, UNASSIGNED, compute_status
+from .services.enforcement import run_enforcement
+from .services.status import ACTIVE, DUE_SOON, EXEMPT, EXPIRED, OVERDUE, UNASSIGNED, compute_status
 from .services.sync import run_sync
 
 User = get_user_model()
@@ -378,3 +379,154 @@ class SettingsApiTests(AuthenticatedTestCase):
         # Blank clears it.
         self.client.put("/api/settings/", {"jellyfin_api_key": ""}, format="json")
         self.assertEqual(AppSettings.load().jellyfin_api_key, "")
+
+
+class EnforcementTests(AuthenticatedTestCase):
+    def setUp(self):
+        super().setUp()
+        s = self.settings_row
+        s.jellyfin_url = "http://jellyfin"
+        s.jellyfin_api_key = "k"
+        s.grace_days = 2
+        s.auto_disable_after_days = 0
+        s.save()
+        self.plan = make_plan()
+        today = timezone.localdate()
+        self.late = make_sub("late", plan=self.plan, next_payment_date=today - timedelta(days=5))
+        self.in_grace = make_sub("grace", plan=self.plan, next_payment_date=today - timedelta(days=1))
+        self.active = make_sub("active", plan=self.plan, next_payment_date=today + timedelta(days=20))
+        self.admin_late = make_sub("adminlate", plan=self.plan, next_payment_date=today - timedelta(days=30), is_admin=True)
+        self.manual = make_sub("manual", plan=self.plan, next_payment_date=today + timedelta(days=10), is_disabled=True, access_disabled_by_app=False)
+        self.paid_back = make_sub("paidback", plan=self.plan, next_payment_date=today + timedelta(days=10), is_disabled=True, access_disabled_by_app=True)
+        self.trial = make_sub("trial", status_override="exempt", exempt_until=today - timedelta(days=1))
+        self.trial_ok = make_sub("trialok", status_override="exempt", exempt_until=today + timedelta(days=5))
+        self.free = make_sub("free", status_override="exempt")
+
+    def test_exemption_statuses(self):
+        self.assertEqual(compute_status(self.trial, self.settings_row).status, EXPIRED)
+        st = compute_status(self.trial_ok, self.settings_row)
+        self.assertEqual((st.status, st.days_until_due), (EXEMPT, 5))
+        self.assertEqual(compute_status(self.free, self.settings_row).status, EXEMPT)
+
+    @mock.patch("subscriptions.services.enforcement.JellyfinClient")
+    def test_run_enforcement_disables_and_restores(self, client_cls):
+        client = client_cls.return_value
+        client.logout_user_everywhere.return_value = {"sessions_stopped": 1, "devices_removed": 2}
+
+        result = run_enforcement()
+        self.assertEqual({d["name"] for d in result["disabled"]}, {"late", "trial"})
+        self.assertEqual({e["name"] for e in result["enabled"]}, {"paidback"})
+        self.assertEqual(result["errors"], [])
+        client.set_user_disabled.assert_any_call("id-late", True)
+        client.set_user_disabled.assert_any_call("id-trial", True)
+        client.set_user_disabled.assert_any_call("id-paidback", False)
+        client.logout_user_everywhere.assert_any_call("id-late", message=self.settings_row.disable_message)
+
+        self.late.refresh_from_db()
+        self.assertTrue(self.late.is_disabled)
+        self.assertTrue(self.late.access_disabled_by_app)
+        self.assertIsNotNone(self.late.access_disabled_at)
+        self.paid_back.refresh_from_db()
+        self.assertFalse(self.paid_back.is_disabled)
+        self.assertFalse(self.paid_back.access_disabled_by_app)
+        for untouched in (self.in_grace, self.active, self.admin_late, self.trial_ok, self.free):
+            untouched.refresh_from_db()
+            self.assertFalse(untouched.is_disabled, untouched.name)
+        self.manual.refresh_from_db()
+        self.assertTrue(self.manual.is_disabled)
+
+        events = AccessEvent.objects.filter(subscriber=self.late)
+        self.assertEqual(events.count(), 1)
+        self.assertEqual((events[0].action, events[0].automatic, events[0].devices_removed), ("disabled", True, 2))
+        self.assertIn("5 days overdue", events[0].reason)
+        self.assertIn("exemption ended", AccessEvent.objects.get(subscriber=self.trial).reason)
+
+        # Idempotent: a second run changes nothing.
+        result = run_enforcement()
+        self.assertEqual((result["disabled"], result["enabled"]), ([], []))
+        self.assertEqual(AccessEvent.objects.count(), 3)
+
+    @mock.patch("subscriptions.services.enforcement.JellyfinClient")
+    def test_dry_run_and_settings(self, client_cls):
+        result = run_enforcement(dry_run=True)
+        self.assertEqual({d["name"] for d in result["disabled"]}, {"late", "trial"})
+        client_cls.return_value.set_user_disabled.assert_not_called()
+        self.assertEqual(AccessEvent.objects.count(), 0)
+
+        self.settings_row.auto_disable_enabled = False
+        self.settings_row.save()
+        self.assertIn("skipped", run_enforcement())
+        self.assertNotIn("skipped", run_enforcement(force=True, dry_run=True))
+
+        self.settings_row.auto_disable_enabled = True
+        self.settings_row.auto_disable_after_days = 10  # 5 days overdue, 3 beyond grace: not yet
+        self.settings_row.save()
+        result = run_enforcement(dry_run=True)
+        self.assertEqual({d["name"] for d in result["disabled"]}, {"trial"})
+
+    @mock.patch("subscriptions.services.enforcement.JellyfinClient")
+    def test_payment_restores_access(self, client_cls):
+        today = timezone.localdate()
+        self.late.is_disabled = True
+        self.late.access_disabled_by_app = True
+        self.late.save()
+        res = self.client.post(f"/api/subscribers/{self.late.pk}/payments/", {"period_start": today.isoformat()}, format="json")
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertTrue(res.json()["access_restored"])
+        client_cls.return_value.set_user_disabled.assert_called_once_with("id-late", False)
+        self.late.refresh_from_db()
+        self.assertFalse(self.late.is_disabled)
+        self.assertEqual(AccessEvent.objects.get(subscriber=self.late).reason, "payment recorded")
+
+        # A manually disabled account is not touched by a payment.
+        res = self.client.post(f"/api/subscribers/{self.manual.pk}/payments/", {}, format="json")
+        self.assertFalse(res.json()["access_restored"])
+        self.manual.refresh_from_db()
+        self.assertTrue(self.manual.is_disabled)
+
+    @mock.patch("subscriptions.views.JellyfinClient")
+    def test_manual_toggle_is_not_auto_reverted(self, client_cls):
+        res = self.client.post(f"/api/subscribers/{self.active.pk}/jellyfin-access/", {"disabled": True}, format="json")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.active.refresh_from_db()
+        self.assertTrue(self.active.is_disabled)
+        self.assertFalse(self.active.access_disabled_by_app)
+        with mock.patch("subscriptions.services.enforcement.JellyfinClient"):
+            result = run_enforcement()
+        self.assertNotIn("active", {e["name"] for e in result["enabled"]})
+
+    def test_enforcement_endpoint(self):
+        data = self.client.get("/api/enforcement/").json()
+        self.assertTrue(data["enabled"])
+        self.assertEqual({d["name"] for d in data["pending_disable"]}, {"late", "trial"})
+        self.assertEqual({d["name"] for d in data["pending_enable"]}, {"paidback"})
+
+
+class JellyfinLogoutTests(TestCase):
+    def test_logout_user_everywhere_stops_playback_and_removes_devices(self):
+        from subscriptions.integrations.jellyfin import JellyfinClient
+
+        client = JellyfinClient("http://jellyfin", "k")
+        calls = []
+
+        def fake_request(method, path, **kwargs):
+            calls.append((method, path, kwargs.get("params"), kwargs.get("json")))
+            if path == "/Sessions":
+                return [
+                    {"Id": "s1", "UserId": "AABB-CCDD", "NowPlayingItem": {"Name": "x"}},
+                    {"Id": "s2", "UserId": "aabbccdd"},
+                    {"Id": "s3", "UserId": "other", "AdditionalUsers": [{"UserId": "AABBCCDD"}]},
+                    {"Id": "s4", "UserId": "someone-else"},
+                ]
+            if path == "/Devices" and method == "GET":
+                return {"Items": [{"Id": "d1"}, {"Id": "d2"}]}
+            return None
+
+        with mock.patch.object(client, "request", side_effect=fake_request):
+            counts = client.logout_user_everywhere("AABBCCDD", message="bye")
+        self.assertEqual(counts, {"sessions_stopped": 1, "devices_removed": 2})
+        messaged = [c[1] for c in calls if c[1].endswith("/Message")]
+        self.assertEqual(messaged, ["/Sessions/s1/Message", "/Sessions/s2/Message", "/Sessions/s3/Message"])
+        self.assertIn(("POST", "/Sessions/s1/Playing/Stop", None, None), calls)
+        self.assertIn(("DELETE", "/Devices", {"id": "d1"}, None), calls)
+        self.assertIn(("DELETE", "/Devices", {"id": "d2"}, None), calls)

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { dateShort, dateTime, daysLabel, money } from '../lib/format';
-import type { RemindersOverview } from '../lib/types';
+import type { EnforcementOverview, EnforcementResult, RemindersOverview } from '../lib/types';
 import { Banner, Card, EmptyState, ErrorBanner, Modal, Spinner, StatusBadge, useToast } from '../components/ui';
 
 interface RunResult {
@@ -21,6 +21,22 @@ export function RemindersPage() {
   const { push: toast } = useToast();
   const [preview, setPreview] = useState<RunResult | null>(null);
   const query = useQuery({ queryKey: ['reminders'], queryFn: () => api.get<RemindersOverview>('/api/reminders/') });
+  const enforcement = useQuery({ queryKey: ['enforcement'], queryFn: () => api.get<EnforcementOverview>('/api/enforcement/') });
+  const applyEnforcement = useMutation({
+    mutationFn: () => api.post<EnforcementResult>('/api/enforcement/', { dry_run: false }),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ['enforcement'] });
+      qc.invalidateQueries({ queryKey: ['subscribers'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      if (result.skipped) {
+        toast(result.skipped, 'error');
+        return;
+      }
+      const summary = `${result.disabled.length} disabled, ${result.enabled.length} restored${result.errors.length ? ` · ${result.errors.join('; ')}` : ''}`;
+      toast(summary, result.errors.length ? 'error' : 'ok');
+    },
+    onError: (err: Error) => toast(err.message, 'error'),
+  });
 
   const run = useMutation({
     mutationFn: (dry_run: boolean) => api.post<RunResult>('/api/reminders/', { dry_run }),
@@ -51,6 +67,103 @@ export function RemindersPage() {
           No notification channel configured: reminders are computed but cannot be delivered. <Link to="/settings">Add a channel in Settings</Link>.
         </Banner>
       )}
+
+      <Card
+        title="Access enforcement"
+        subtitle={
+          enforcement.data
+            ? enforcement.data.enabled
+              ? `Automatic: accounts are disabled once past the grace period${enforcement.data.after_days ? ` plus ${enforcement.data.after_days} days` : ''}, or when an exemption expires`
+              : 'Automatic enforcement is off; you can still apply it manually here'
+            : ''
+        }
+        actions={
+          <div className="row">
+            <Link className="btn btn-sm" to="/settings">
+              Settings
+            </Link>
+            <button
+              className="btn btn-sm btn-primary"
+              onClick={() => applyEnforcement.mutate()}
+              disabled={
+                applyEnforcement.isPending ||
+                !enforcement.data?.jellyfin_configured ||
+                ((enforcement.data?.pending_disable.length ?? 0) === 0 && (enforcement.data?.pending_enable.length ?? 0) === 0)
+              }
+            >
+              Apply now
+            </button>
+          </div>
+        }
+      >
+        {enforcement.isLoading ? (
+          <Spinner />
+        ) : enforcement.error ? (
+          <ErrorBanner error={enforcement.error} />
+        ) : (
+          <div className="grid grid-3">
+            <div>
+              <div className="section-title">Will be disabled</div>
+              {enforcement.data!.pending_disable.length === 0 ? (
+                <div className="small text-muted">Nobody</div>
+              ) : (
+                <div className="list">
+                  {enforcement.data!.pending_disable.map((p) => (
+                    <div className="list-item" key={p.subscriber_id}>
+                      <div>
+                        <div className="primary">
+                          <Link to={`/subscribers/${p.subscriber_id}`}>{p.name}</Link>
+                        </div>
+                        <div className="secondary">{p.reason}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <div className="section-title">Will be restored</div>
+              {enforcement.data!.pending_enable.length === 0 ? (
+                <div className="small text-muted">Nobody</div>
+              ) : (
+                <div className="list">
+                  {enforcement.data!.pending_enable.map((p) => (
+                    <div className="list-item" key={p.subscriber_id}>
+                      <div>
+                        <div className="primary">
+                          <Link to={`/subscribers/${p.subscriber_id}`}>{p.name}</Link>
+                        </div>
+                        <div className="secondary">{p.reason}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <div className="section-title">Recent changes</div>
+              {enforcement.data!.events.length === 0 ? (
+                <div className="small text-muted">No accounts disabled or restored yet</div>
+              ) : (
+                <div className="list">
+                  {enforcement.data!.events.slice(0, 8).map((e) => (
+                    <div className="list-item" key={e.id}>
+                      <div>
+                        <div className="primary">
+                          <Link to={`/subscribers/${e.subscriber}`}>{e.subscriber_name}</Link>{' '}
+                          <span className={e.action === 'disabled' ? 'text-critical' : 'text-good'}>{e.action}</span>
+                        </div>
+                        <div className="secondary">{e.reason}</div>
+                      </div>
+                      <div className="small text-muted">{dateTime(e.created_at)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </Card>
 
       <div className="grid grid-2">
         <Card title="Schedule" actions={<Link className="btn btn-sm" to="/settings">Change</Link>}>

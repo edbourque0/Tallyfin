@@ -25,9 +25,10 @@ from .integrations.http import IntegrationError
 from .integrations.jellyfin import JellyfinClient
 from .integrations.seerr import SeerrClient
 from .integrations.tracearr import TracearrClient
-from .models import AppSettings, Payment, Plan, ReminderLog, Subscriber, SyncRun
+from .models import AccessEvent, AppSettings, Payment, Plan, ReminderLog, Subscriber, SyncRun
 from .serializers import (
     SECRET_MASK,
+    AccessEventSerializer,
     AppSettingsSerializer,
     PaymentSerializer,
     PlanSerializer,
@@ -36,6 +37,7 @@ from .serializers import (
     SubscriberSerializer,
     SyncRunSerializer,
 )
+from .services import enforcement
 from .services import reminders as reminder_service
 from .services.notifications import configured_channels, send_notification
 from .services.profitability import compute_profitability
@@ -234,6 +236,7 @@ class SubscriberDetailView(APIView):
         data = SubscriberSerializer(sub, context=context).data
         data["payments"] = PaymentSerializer(sub.payments.select_related("plan").all(), many=True).data
         data["reminders"] = ReminderLogSerializer(sub.reminders.all()[:20], many=True).data
+        data["access_events"] = AccessEventSerializer(sub.access_events.all()[:20], many=True).data
         return Response(data)
 
     def patch(self, request, pk: int):
@@ -289,10 +292,20 @@ class RecordPaymentView(APIView):
         if not sub.subscription_start:
             sub.subscription_start = period_start
         sub.save()
+
+        # If Tallyfin had disabled their Jellyfin account, give access back right away.
+        access_restored = False
+        access_error = None
+        try:
+            access_restored = enforcement.restore_after_payment(sub, settings) is not None
+        except IntegrationError as exc:
+            access_error = str(exc)
         return Response(
             {
                 "payment": PaymentSerializer(payment).data,
                 "subscriber": SubscriberSerializer(sub, context=_settings_context()).data,
+                "access_restored": access_restored,
+                "access_error": access_error,
             },
             status=http_status.HTTP_201_CREATED,
         )
@@ -391,9 +404,11 @@ class JellyfinAccessView(APIView):
         if not settings.jellyfin_configured:
             return Response({"detail": "Jellyfin is not configured."}, status=400)
         disabled = bool(request.data.get("disabled"))
-        JellyfinClient(settings.jellyfin_url, settings.jellyfin_api_key).set_user_disabled(sub.jellyfin_id, disabled)
-        sub.is_disabled = disabled
-        sub.save(update_fields=["is_disabled", "updated_at"])
+        client = JellyfinClient(settings.jellyfin_url, settings.jellyfin_api_key)
+        if disabled:
+            enforcement.disable_access(client, sub, "disabled manually", settings, automatic=False)
+        else:
+            enforcement.enable_access(client, sub, "enabled manually", automatic=False)
         return Response(SubscriberSerializer(sub, context=_settings_context()).data)
 
 
@@ -433,7 +448,7 @@ class DashboardView(APIView):
         today = timezone.localdate()
         context = {"settings": settings}
 
-        counts = {"total": 0, "paying": 0, "active": 0, "due_soon": 0, "overdue": 0, "unassigned": 0, "exempt": 0, "paused": 0, "cancelled": 0}
+        counts = {"total": 0, "paying": 0, "active": 0, "due_soon": 0, "overdue": 0, "unassigned": 0, "exempt": 0, "paused": 0, "cancelled": 0, "expired": 0}
         mrr = Decimal("0")
         attention = []
         for sub in _subscriber_queryset().order_by("name"):
@@ -443,7 +458,7 @@ class DashboardView(APIView):
             if sub.is_paying:
                 counts["paying"] += 1
                 mrr += st.monthly_revenue
-            if st.status in (OVERDUE, DUE_SOON):
+            if st.needs_attention:
                 attention.append(SubscriberSerializer(sub, context=context).data)
         attention.sort(key=lambda s: (s["days_until_due"] if s["days_until_due"] is not None else 0, s["name"].lower()))
 
@@ -523,6 +538,30 @@ class SyncView(APIView):
             return Response({"detail": "Configure Jellyfin first."}, status=400)
         started = start_sync_in_background("manual")
         return Response({"started": started, "running": True})
+
+
+class EnforcementView(APIView):
+    """Access enforcement: what would be disabled/re-enabled now, recent events, and a manual run."""
+
+    def get(self, request):
+        settings = AppSettings.load()
+        pending_disable, pending_enable = ([], []) if not settings.jellyfin_configured else enforcement.plan_actions(settings)
+        return Response(
+            {
+                "enabled": settings.auto_disable_enabled,
+                "after_days": settings.auto_disable_after_days,
+                "grace_days": settings.grace_days,
+                "reenable_on_payment": settings.auto_reenable_on_payment,
+                "jellyfin_configured": settings.jellyfin_configured,
+                "pending_disable": [{"subscriber_id": s.pk, "name": s.name, "reason": r} for s, r in pending_disable],
+                "pending_enable": [{"subscriber_id": s.pk, "name": s.name, "reason": r} for s, r in pending_enable],
+                "events": AccessEventSerializer(AccessEvent.objects.select_related("subscriber")[:50], many=True).data,
+            }
+        )
+
+    def post(self, request):
+        dry_run = bool(request.data.get("dry_run"))
+        return Response(enforcement.run_enforcement(dry_run=dry_run, force=True))
 
 
 class RemindersView(APIView):

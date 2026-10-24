@@ -51,7 +51,8 @@ export type SubscriptionStatus =
   | 'unassigned'
   | 'exempt'
   | 'paused'
-  | 'cancelled';
+  | 'cancelled'
+  | 'expired';
 
 export type StatusOverride = '' | 'exempt' | 'paused' | 'cancelled';
 
@@ -70,6 +71,9 @@ export interface Subscriber {
   subscription_start: string | null;
   next_payment_date: string | null;
   status_override: StatusOverride;
+  exempt_until: string | null;
+  access_disabled_by_app: boolean;
+  access_disabled_at: string | null;
   email: string;
   contact: string;
   notes: string;
@@ -111,9 +115,41 @@ export interface ReminderLogEntry {
   channels: string;
 }
 
+export interface AccessEvent {
+  id: number;
+  subscriber: number;
+  subscriber_name: string;
+  action: 'disabled' | 'enabled';
+  automatic: boolean;
+  reason: string;
+  sessions_stopped: number;
+  devices_removed: number;
+  created_at: string;
+}
+
 export interface SubscriberDetail extends Subscriber {
   payments: Payment[];
   reminders: ReminderLogEntry[];
+  access_events: AccessEvent[];
+}
+
+export interface EnforcementOverview {
+  enabled: boolean;
+  after_days: number;
+  grace_days: number;
+  reenable_on_payment: boolean;
+  jellyfin_configured: boolean;
+  pending_disable: { subscriber_id: number; name: string; reason: string }[];
+  pending_enable: { subscriber_id: number; name: string; reason: string }[];
+  events: AccessEvent[];
+}
+
+export interface EnforcementResult {
+  dry_run?: boolean;
+  skipped?: string;
+  disabled: { subscriber_id: number; name: string; reason: string; sessions_stopped?: number; devices_removed?: number }[];
+  enabled: { subscriber_id: number; name: string; reason: string }[];
+  errors: string[];
 }
 
 export interface Activity {
@@ -269,6 +305,11 @@ export interface AppSettings {
   reminder_time: string;
   reminder_days_before: string;
   reminder_overdue_every_days: number;
+  auto_disable_enabled: boolean;
+  auto_disable_after_days: number;
+  auto_reenable_on_payment: boolean;
+  notify_on_access_change: boolean;
+  disable_message: string;
   discord_webhook_url: string;
   ntfy_url: string;
   ntfy_topic: string;

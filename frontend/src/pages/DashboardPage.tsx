@@ -24,7 +24,7 @@ export function DashboardPage() {
   const d = query.data!;
   const cur = d.currency;
   const chartData = d.revenue_by_month.map((m) => ({ ...m, label: monthLabel(m.month) }));
-  const overdue = d.attention.filter((s) => s.status === 'overdue');
+  const overdue = d.attention.filter((s) => s.status === 'overdue' || s.status === 'expired');
   const dueSoon = d.attention.filter((s) => s.status === 'due_soon');
 
   return (
@@ -43,7 +43,12 @@ export function DashboardPage() {
       <div className="grid grid-kpi">
         <StatTile label="Paying subscribers" value={d.counts.paying} hint={`${d.counts.total} Jellyfin users`} />
         <StatTile label="Monthly recurring revenue" value={money(d.mrr, cur)} hint={`${money(d.collected_this_month, cur)} collected this month`} />
-        <StatTile label="Overdue" value={d.counts.overdue ?? 0} hint={d.counts.overdue ? 'needs follow-up' : 'all caught up'} hintKind={d.counts.overdue ? 'critical' : 'good'} />
+        <StatTile
+          label="Overdue"
+          value={(d.counts.overdue ?? 0) + (d.counts.expired ?? 0)}
+          hint={d.counts.expired ? `${d.counts.expired} expired exemption${d.counts.expired === 1 ? '' : 's'}` : d.counts.overdue ? 'needs follow-up' : 'all caught up'}
+          hintKind={d.counts.overdue || d.counts.expired ? 'critical' : 'good'}
+        />
         <StatTile label="Due soon" value={d.counts.due_soon ?? 0} hint="within the due-soon window" />
         <StatTile label="Without a plan" value={d.counts.unassigned ?? 0} hint={`${d.counts.exempt ?? 0} exempt`} />
       </div>
@@ -63,12 +68,14 @@ export function DashboardPage() {
                         <Link to={`/subscribers/${s.id}`}>{s.name}</Link>
                       </div>
                       <div className="secondary">
-                        {s.plan?.name} · {money(s.plan?.price, s.plan?.currency ?? cur)} · due {dateShort(s.next_payment_date)}
+                        {s.status === 'expired'
+                          ? `exemption ended ${dateShort(s.exempt_until)}${s.is_disabled ? ' · access disabled' : ''}`
+                          : `${s.plan?.name} · ${money(s.plan?.price, s.plan?.currency ?? cur)} · due ${dateShort(s.next_payment_date)}${s.is_disabled ? ' · access disabled' : ''}`}
                       </div>
                     </div>
                   </div>
                   <div className="row">
-                    <span className={`small ${s.status === 'overdue' ? 'text-critical' : 'text-warning'}`}>{daysLabel(s.days_until_due)}</span>
+                    <span className={`small ${s.status === 'due_soon' ? 'text-warning' : 'text-critical'}`}>{daysLabel(s.days_until_due)}</span>
                     <StatusBadge status={s.status} />
                   </div>
                 </div>

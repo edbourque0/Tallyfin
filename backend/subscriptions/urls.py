@@ -28,6 +28,7 @@ urlpatterns = [
     path("profitability/", views.ProfitabilityView.as_view()),
     path("sync/", views.SyncView.as_view()),
     path("reminders/", views.RemindersView.as_view()),
+    path("enforcement/", views.EnforcementView.as_view()),
 ]
 
 urlpatterns += router.urls

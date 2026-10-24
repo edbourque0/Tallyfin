@@ -61,7 +61,7 @@ export function SubscriberDetailPage() {
               <h1>{s.name}</h1>
               <StatusBadge status={s.status} label={s.status_label} />
               {s.is_admin && <span className="tag">Jellyfin admin</span>}
-              {s.is_disabled && <span className="tag">disabled in Jellyfin</span>}
+              {s.is_disabled && <span className="tag">{s.access_disabled_by_app ? 'disabled by Tallyfin' : 'disabled in Jellyfin'}</span>}
               {s.removed_from_jellyfin && <span className="tag">removed from Jellyfin</span>}
             </div>
             <div className="small text-muted">
@@ -115,6 +115,12 @@ export function SubscriberDetailPage() {
             <dd>{dateShort(s.subscription_start)}</dd>
             <dt>Billing status</dt>
             <dd>{s.status_override ? s.status_override : 'billed normally'}</dd>
+            {s.status_override === 'exempt' && (
+              <>
+                <dt>Exempt until</dt>
+                <dd className={s.status === 'expired' ? 'text-critical' : ''}>{s.exempt_until ? dateShort(s.exempt_until) : 'indefinitely'}</dd>
+              </>
+            )}
             <dt>Contact</dt>
             <dd>{[s.contact, s.email].filter(Boolean).join(' · ') || '—'}</dd>
             <dt>Total paid</dt>
@@ -251,7 +257,35 @@ export function SubscriberDetailPage() {
         </Card>
       </div>
 
-      <div className="grid grid-2">
+      <div className="grid grid-3">
+        <Card
+          title="Access history"
+          subtitle={s.access_disabled_by_app && s.access_disabled_at ? `Disabled by Tallyfin ${relative(s.access_disabled_at)}` : 'Jellyfin account enable / disable events'}
+        >
+          {s.access_events.length === 0 ? (
+            <EmptyState title="No access changes recorded" />
+          ) : (
+            <div className="list">
+              {s.access_events.map((e) => (
+                <div className="list-item" key={e.id}>
+                  <div>
+                    <div className={`primary ${e.action === 'disabled' ? 'text-critical' : 'text-good'}`}>
+                      {e.action === 'disabled' ? 'Disabled' : 'Enabled'} {e.automatic ? 'automatically' : 'manually'}
+                    </div>
+                    <div className="secondary">
+                      {e.reason}
+                      {e.action === 'disabled' && (e.sessions_stopped > 0 || e.devices_removed > 0)
+                        ? ` · ${e.sessions_stopped} stream(s) stopped, ${e.devices_removed} device(s) logged out`
+                        : ''}
+                    </div>
+                  </div>
+                  <div className="small text-muted">{dateTime(e.created_at)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
         <Card title="Recent plays" subtitle={activity.data?.tracearr.error ?? 'Live from Tracearr'}>
           {activity.isLoading ? (
             <Spinner />

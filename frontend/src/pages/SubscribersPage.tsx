@@ -65,8 +65,9 @@ export function SubscribersPage() {
       switch (filter) {
         case 'paying':
           return r.sub.is_paying;
-        case 'due_soon':
         case 'overdue':
+          return r.status === 'overdue' || r.status === 'expired';
+        case 'due_soon':
         case 'unassigned':
         case 'exempt':
           return r.status === filter;
@@ -83,7 +84,7 @@ export function SubscribersPage() {
     for (const r of rows) {
       if (r.sub.is_paying) c.paying++;
       if (r.status === 'due_soon') c.due_soon++;
-      if (r.status === 'overdue') c.overdue++;
+      if (r.status === 'overdue' || r.status === 'expired') c.overdue++;
       if (r.status === 'unassigned') c.unassigned++;
       if (r.status === 'exempt') c.exempt++;
     }
@@ -164,7 +165,7 @@ export function SubscribersPage() {
                             <Link to={`/subscribers/${s.id}`}>{s.name}</Link>
                           </div>
                           <div className="sub">
-                            {s.is_admin && <span className="tag">admin</span>} {s.is_disabled && <span className="tag">disabled</span>}{' '}
+                            {s.is_admin && <span className="tag">admin</span>} {s.is_disabled && <span className="tag">{s.access_disabled_by_app ? 'disabled by Tallyfin' : 'disabled'}</span>}{' '}
                             {s.removed_from_jellyfin && <span className="tag">removed</span>} {s.contact || s.email || ''}
                           </div>
                         </div>

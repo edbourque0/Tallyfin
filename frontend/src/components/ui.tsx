@@ -133,6 +133,7 @@ const STATUS_LABEL: Record<SubscriptionStatus, string> = {
   exempt: 'Exempt',
   paused: 'Paused',
   cancelled: 'Cancelled',
+  expired: 'Exemption expired',
 };
 
 export function StatusBadge({ status, label }: { status: SubscriptionStatus | string; label?: string }) {

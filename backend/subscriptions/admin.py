@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AppSettings, Payment, Plan, ReminderLog, Subscriber, SyncRun, UsageSnapshot
+from .models import AccessEvent, AppSettings, Payment, Plan, ReminderLog, Subscriber, SyncRun, UsageSnapshot
 
 admin.site.site_header = "Tallyfin"
 admin.site.site_title = "Tallyfin"
@@ -39,6 +39,12 @@ class UsageSnapshotAdmin(admin.ModelAdmin):
 @admin.register(ReminderLog)
 class ReminderLogAdmin(admin.ModelAdmin):
     list_display = ("subscriber", "kind", "due_date", "sent_at", "channels")
+
+
+@admin.register(AccessEvent)
+class AccessEventAdmin(admin.ModelAdmin):
+    list_display = ("subscriber", "action", "automatic", "reason", "created_at")
+    list_filter = ("action", "automatic")
 
 
 @admin.register(SyncRun)

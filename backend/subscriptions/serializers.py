@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from .models import AppSettings, Payment, Plan, ReminderLog, Subscriber, SyncRun, UsageSnapshot
+from .models import AccessEvent, AppSettings, Payment, Plan, ReminderLog, Subscriber, SyncRun, UsageSnapshot
 from .services.notifications import configured_channels
 from .services.status import compute_status
 
@@ -132,6 +132,9 @@ class SubscriberSerializer(serializers.ModelSerializer):
             "subscription_start",
             "next_payment_date",
             "status_override",
+            "exempt_until",
+            "access_disabled_by_app",
+            "access_disabled_at",
             "email",
             "contact",
             "notes",
@@ -155,6 +158,8 @@ class SubscriberSerializer(serializers.ModelSerializer):
             "last_login_at",
             "last_activity_at",
             "removed_from_jellyfin",
+            "access_disabled_by_app",
+            "access_disabled_at",
             "created_at",
             "updated_at",
         ]
@@ -251,6 +256,14 @@ class ReminderLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = ReminderLog
         fields = ["id", "subscriber", "subscriber_name", "kind", "due_date", "sent_at", "channels"]
+
+
+class AccessEventSerializer(serializers.ModelSerializer):
+    subscriber_name = serializers.CharField(source="subscriber.name", read_only=True)
+
+    class Meta:
+        model = AccessEvent
+        fields = ["id", "subscriber", "subscriber_name", "action", "automatic", "reason", "sessions_stopped", "devices_removed", "created_at"]
 
 
 class SyncRunSerializer(serializers.ModelSerializer):

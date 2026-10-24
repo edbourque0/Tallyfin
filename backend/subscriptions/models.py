@@ -67,6 +67,20 @@ class AppSettings(models.Model):
     email_from = models.CharField(max_length=200, blank=True, default="")
     email_to = models.CharField(max_length=500, blank=True, default="")
 
+    # Access enforcement (disable the Jellyfin account when a subscription lapses)
+    auto_disable_enabled = models.BooleanField(default=True)
+    auto_disable_after_days = models.PositiveIntegerField(
+        default=0, help_text="Extra days overdue (after the grace period) before the account is disabled."
+    )
+    auto_reenable_on_payment = models.BooleanField(default=True)
+    notify_on_access_change = models.BooleanField(default=True)
+    disable_message = models.CharField(
+        max_length=300,
+        blank=True,
+        default="Your subscription to this server has expired. Contact the admin to renew your access.",
+        help_text="Shown on the user's active Jellyfin sessions just before they are logged out.",
+    )
+
     # Runtime state
     last_sync_at = models.DateTimeField(null=True, blank=True)
     last_reminder_run_date = models.DateField(null=True, blank=True)
@@ -201,6 +215,11 @@ class Subscriber(models.Model):
     subscription_start = models.DateField(null=True, blank=True)
     next_payment_date = models.DateField(null=True, blank=True)
     status_override = models.CharField(max_length=20, choices=Override.choices, blank=True, default="")
+    exempt_until = models.DateField(
+        null=True, blank=True, help_text="For exempt accounts: free access ends on this date (blank = indefinitely)."
+    )
+    access_disabled_by_app = models.BooleanField(default=False)
+    access_disabled_at = models.DateTimeField(null=True, blank=True)
     email = models.CharField(max_length=200, blank=True, default="")
     contact = models.CharField(max_length=200, blank=True, default="", help_text="Discord handle, phone, etc.")
     notes = models.TextField(blank=True, default="")
@@ -291,6 +310,28 @@ class ReminderLog(models.Model):
 
     def __str__(self) -> str:
         return f"{self.kind} for {self.subscriber} (due {self.due_date})"
+
+
+class AccessEvent(models.Model):
+    """Audit trail of Jellyfin account enable/disable actions (automatic or manual)."""
+
+    class Action(models.TextChoices):
+        DISABLED = "disabled", "Disabled"
+        ENABLED = "enabled", "Enabled"
+
+    subscriber = models.ForeignKey(Subscriber, on_delete=models.CASCADE, related_name="access_events")
+    action = models.CharField(max_length=10, choices=Action.choices)
+    automatic = models.BooleanField(default=True)
+    reason = models.CharField(max_length=300, blank=True, default="")
+    sessions_stopped = models.IntegerField(default=0)
+    devices_removed = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.subscriber} {self.action} ({'auto' if self.automatic else 'manual'})"
 
 
 class SyncRun(models.Model):

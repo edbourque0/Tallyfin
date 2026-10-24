@@ -183,6 +183,7 @@ td.muted { color: var(--muted); }
 .badge-exempt { color: #8fc1ff; background: rgba(57, 135, 229, 0.16); }
 .badge-paused { color: var(--serious); background: rgba(236, 131, 90, 0.14); }
 .badge-cancelled { color: var(--muted); background: var(--surface-3); }
+.badge-expired { color: #ff7b7b; background: rgba(208, 59, 59, 0.16); }
 .badge-neutral { color: var(--text-2); background: var(--surface-3); }
 .badge-accent { color: var(--accent-strong); background: var(--accent-soft); }
 .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--border); padding: 1px 6px; border-radius: 5px; }

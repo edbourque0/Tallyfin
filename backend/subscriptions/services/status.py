@@ -17,6 +17,7 @@ UNASSIGNED = "unassigned"
 EXEMPT = "exempt"
 PAUSED = "paused"
 CANCELLED = "cancelled"
+EXPIRED = "expired"  # a temporary exemption (exempt_until) has ended
 
 LABELS = {
     ACTIVE: "Active",
@@ -26,7 +27,11 @@ LABELS = {
     EXEMPT: "Exempt",
     PAUSED: "Paused",
     CANCELLED: "Cancelled",
+    EXPIRED: "Exemption expired",
 }
+
+# Statuses in which an account that Tallyfin disabled gets its access back.
+GOOD_STANDING = (ACTIVE, DUE_SOON, EXEMPT)
 
 
 @dataclass
@@ -42,7 +47,7 @@ class SubscriptionStatus:
 
     @property
     def needs_attention(self) -> bool:
-        return self.status in (DUE_SOON, OVERDUE)
+        return self.status in (DUE_SOON, OVERDUE, EXPIRED)
 
 
 def today() -> date:
@@ -51,8 +56,12 @@ def today() -> date:
 
 def compute_status(sub: Subscriber, settings: AppSettings, on: date | None = None) -> SubscriptionStatus:
     on = on or today()
+    if sub.status_override == EXEMPT and sub.exempt_until and sub.exempt_until < on:
+        return SubscriptionStatus(EXPIRED, (sub.exempt_until - on).days, sub.exempt_until, Decimal("0"))
     if sub.status_override:
-        return SubscriptionStatus(sub.status_override, None, sub.next_payment_date, Decimal("0"))
+        due = sub.exempt_until if sub.status_override == EXEMPT else sub.next_payment_date
+        days = (due - on).days if due else None
+        return SubscriptionStatus(sub.status_override, days, due, Decimal("0"))
     if not sub.plan_id:
         return SubscriptionStatus(UNASSIGNED, None, None, Decimal("0"))
 

@@ -22,6 +22,7 @@ export function SubscriptionModal({ subscriber, plans, onClose }: { subscriber: 
   const [nextDate, setNextDate] = useState(subscriber.next_payment_date ?? '');
   const [startDate, setStartDate] = useState(subscriber.subscription_start ?? '');
   const [override, setOverride] = useState<StatusOverride>(subscriber.status_override);
+  const [exemptUntil, setExemptUntil] = useState(subscriber.exempt_until ?? '');
   const [email, setEmail] = useState(subscriber.email);
   const [contact, setContact] = useState(subscriber.contact);
   const [notes, setNotes] = useState(subscriber.notes);
@@ -36,6 +37,7 @@ export function SubscriptionModal({ subscriber, plans, onClose }: { subscriber: 
         next_payment_date: nextDate || null,
         subscription_start: startDate || null,
         status_override: override,
+        exempt_until: override === 'exempt' && exemptUntil ? exemptUntil : null,
         email,
         contact,
         notes,
@@ -87,6 +89,11 @@ export function SubscriptionModal({ subscriber, plans, onClose }: { subscriber: 
             <option value="cancelled">Cancelled</option>
           </select>
         </Field>
+        {override === 'exempt' && (
+          <Field label="Exempt until" help="Leave blank for permanent free access. After this date the exemption counts as expired and, with enforcement on, the Jellyfin account is disabled.">
+            <input type="date" value={exemptUntil} onChange={(e) => setExemptUntil(e.target.value)} />
+          </Field>
+        )}
         <div className="field-row">
           <Field label="Email">
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="optional" />
@@ -140,7 +147,7 @@ export function PaymentModal({ subscriber, currency, onClose }: { subscriber: Su
 
   const save = useMutation({
     mutationFn: () =>
-      api.post<{ payment: Payment; subscriber: Subscriber }>(`/api/subscribers/${subscriber.id}/payments/`, {
+      api.post<{ payment: Payment; subscriber: Subscriber; access_restored: boolean; access_error: string | null }>(`/api/subscribers/${subscriber.id}/payments/`, {
         amount: amount === '' ? undefined : Number(amount),
         currency: plan?.currency ?? currency,
         paid_at: paidAt,
@@ -151,7 +158,8 @@ export function PaymentModal({ subscriber, currency, onClose }: { subscriber: Su
       }),
     onSuccess: (data) => {
       invalidateSubscriberData(qc, subscriber.id);
-      toast(`Payment recorded. Next due ${dateShort(data.subscriber.next_payment_date)}.`, 'ok');
+      toast(`Payment recorded. Next due ${dateShort(data.subscriber.next_payment_date)}.${data.access_restored ? ' Jellyfin access restored.' : ''}`, 'ok');
+      if (data.access_error) toast(`Could not restore Jellyfin access: ${data.access_error}`, 'error');
       onClose();
     },
   });

@@ -79,6 +79,16 @@ IMAGE_TAG=sha-1a2b3c4 docker compose -f docker-compose.prod.yml up -d
 | Overdue    | Past the due date plus *Grace period* days                              |
 | No plan    | Jellyfin user with no plan assigned (not billed)                        |
 | Exempt / Paused / Cancelled | Manual billing status; never reminded, not counted in revenue |
+| Exemption expired | An exempt account whose *Exempt until* date has passed (trial over) |
+
+### Access enforcement
+
+When enabled (Settings → Access enforcement, on by default) the scheduler disables the Jellyfin account of anyone whose subscription has lapsed, and logs them out everywhere:
+
+- **Who**: billed subscribers overdue past the grace period (plus an optional number of extra days), and exempt accounts whose *Exempt until* date has passed. Jellyfin administrators are never touched.
+- **How**: the user policy is set to disabled, a message is shown on their active sessions, playback is stopped, and every device registered to the user is deleted, which revokes its tokens so all clients are signed out.
+- **Restore**: an account that Tallyfin disabled is re-enabled automatically as soon as a payment (or a new exemption date) puts the subscriber back in good standing. Accounts you disabled manually, in Tallyfin or in Jellyfin, are left alone.
+- **Audit and notice**: every change is logged on the subscriber's page and on the Reminders page, and a notification goes to your channels. `manage.py enforce_access --dry-run` previews what would change.
 
 ### Reminders
 
@@ -162,3 +172,4 @@ All endpoints live under `/api/` and use session authentication (cookie + `X-CSR
 | `GET /api/profitability/` | Ranked revenue-vs-usage table |
 | `GET/POST /api/sync/` | Sync status / trigger a sync |
 | `GET/POST /api/reminders/` | Pending, upcoming, log / send (or `{"dry_run": true}` to preview) |
+| `GET/POST /api/enforcement/` | Accounts about to be disabled / restored, recent access events / apply now (or `{"dry_run": true}`) |

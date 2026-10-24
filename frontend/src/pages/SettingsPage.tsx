@@ -153,6 +153,33 @@ export function SettingsPage() {
         </div>
       </Card>
 
+      <h2 className="section-title">Access enforcement</h2>
+      <Card>
+        <div className="stack">
+          <label className="check">
+            <input type="checkbox" checked={form.auto_disable_enabled} onChange={(e) => set('auto_disable_enabled', e.target.checked)} /> Automatically disable the Jellyfin account and log out every session when a subscription lapses
+          </label>
+          <p className="help">
+            Applies to billed subscribers once they are past the grace period, and to exempt accounts whose “exempt until” date has passed. Jellyfin administrators are never
+            disabled, and accounts you disabled manually are never re-enabled automatically. The scheduler checks every few minutes; you can also apply it from the Reminders page.
+          </p>
+          <div className="field-row">
+            <Field label="Extra days overdue before disabling" help="Counted after the grace period. 0 = as soon as they count as overdue.">
+              {number('auto_disable_after_days', { min: 0 })}
+            </Field>
+            <Field label="Message shown on their screens" help="Sent to their active Jellyfin sessions right before they are logged out.">
+              {text('disable_message', { maxLength: 300 })}
+            </Field>
+          </div>
+          <label className="check">
+            <input type="checkbox" checked={form.auto_reenable_on_payment} onChange={(e) => set('auto_reenable_on_payment', e.target.checked)} /> Restore access automatically once a payment puts them back in good standing
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={form.notify_on_access_change} onChange={(e) => set('notify_on_access_change', e.target.checked)} /> Notify me on the configured channels when accounts are disabled or restored
+          </label>
+        </div>
+      </Card>
+
       <h2 className="section-title">Notification channels</h2>
       <div className="grid grid-2">
         <Card title="Discord" subtitle="Server settings → Integrations → Webhooks">

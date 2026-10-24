@@ -50,16 +50,21 @@ export function ProfitabilityPage() {
           hintKind={data.totals.free_hours_30d > 0 ? 'critical' : 'good'}
         />
         {hasCost ? (
-          <StatTile label="Monthly margin" value={money(data.totals.margin, cur)} hint={`after ${money(data.monthly_server_cost, cur)} server cost`} hintKind={data.totals.margin >= 0 ? 'good' : 'critical'} />
+          <StatTile
+            label="Monthly margin"
+            value={money(data.totals.margin, cur)}
+            hint={`after ${money(data.monthly_server_cost, cur)} running cost (${data.cost_breakdown.kwh_per_month} kWh${data.cost_breakdown.other_costs > 0 ? ` + ${money(data.cost_breakdown.other_costs, cur)} other` : ''})`}
+            hintKind={data.totals.margin >= 0 ? 'good' : 'critical'}
+          />
         ) : (
-          <StatTile label="Monthly margin" value="—" hint={<Link to="/settings">Set a monthly server cost</Link>} small />
+          <StatTile label="Monthly margin" value="—" hint={<Link to="/settings">Enter your electricity price and server wattage</Link>} small />
         )}
       </div>
 
       <div className="grid grid-2">
         <Card
           title={hasCost ? 'Margin per subscriber' : 'Revenue per hour watched'}
-          subtitle={hasCost ? 'Monthly revenue minus the server cost allocated by share of watch time' : 'Higher = pays more for each hour they actually watch (last 30 days)'}
+          subtitle={hasCost ? 'Monthly revenue minus the running cost allocated by share of watch time' : 'Higher = pays more for each hour they actually watch (last 30 days)'}
         >
           {chartRows.length === 0 ? (
             <EmptyState title="No paying subscribers with usage data yet" />
@@ -99,7 +104,7 @@ export function ProfitabilityPage() {
               <strong>Revenue per hour</strong> divides a subscriber's monthly plan value by the hours they watched in the last 30 days. A high number means they pay a lot for little usage (cheap to serve); a low number means heavy use for the price.
             </p>
             <p>
-              <strong>Usage share</strong> is their part of all watch time. With a <Link to="/settings">monthly server cost</Link> configured, that share of the cost is allocated to them and <strong>margin</strong> = revenue − allocated cost.
+              <strong>Usage share</strong> is their part of all watch time. The monthly <Link to="/settings">running cost</Link> (electricity = server watts × hours on per day × 30.44 days × price per kWh, plus any other costs) is split by that share: <strong>allocated cost</strong> = running cost × share, and <strong>margin</strong> = revenue − allocated cost. The total margin is revenue minus the whole running cost.
             </p>
             <p>
               <strong>Transcode %</strong> flags users who cost CPU rather than just bandwidth. <strong>Requests</strong> are Seerr requests, a proxy for how much new content they drive you to add.

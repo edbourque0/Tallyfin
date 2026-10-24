@@ -38,7 +38,13 @@ class AppSettings(models.Model):
     currency = models.CharField(max_length=8, default="USD")
     due_soon_days = models.PositiveIntegerField(default=7)
     grace_days = models.PositiveIntegerField(default=0)
-    monthly_server_cost = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0"))
+    monthly_server_cost = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0"), help_text="Other fixed monthly costs (optional)."
+    )
+    # Electricity: server_watts × server_hours_per_day × days per month × price per kWh
+    electricity_price_per_kwh = models.DecimalField(max_digits=8, decimal_places=4, default=Decimal("0"))
+    server_watts = models.PositiveIntegerField(default=0)
+    server_hours_per_day = models.DecimalField(max_digits=4, decimal_places=1, default=Decimal("24"))
 
     # Sync
     sync_interval_minutes = models.PositiveIntegerField(default=60)
@@ -121,6 +127,19 @@ class AppSettings(models.Model):
     @property
     def seerr_configured(self) -> bool:
         return bool(self.seerr_url and self.seerr_api_key)
+
+    def monthly_cost_breakdown(self) -> dict[str, float]:
+        """Electricity (watts × hours/day × days/month × price per kWh) plus other fixed costs."""
+        hours = min(max(Decimal(self.server_hours_per_day or 0), Decimal("0")), Decimal("24"))
+        kwh_per_month = Decimal(self.server_watts or 0) / Decimal("1000") * hours * DAYS_PER_MONTH
+        electricity = kwh_per_month * Decimal(self.electricity_price_per_kwh or 0)
+        other = Decimal(self.monthly_server_cost or 0)
+        return {
+            "kwh_per_month": float(round(kwh_per_month, 1)),
+            "electricity_cost": float(round(electricity, 2)),
+            "other_costs": float(round(other, 2)),
+            "total": float(round(electricity + other, 2)),
+        }
 
     def reminder_days_list(self) -> list[int]:
         days: set[int] = set()

@@ -119,7 +119,8 @@ For each subscriber (last 30 days):
 - **Revenue / month** = plan price normalised to a month.
 - **Revenue per hour** = revenue / hours watched. High = pays a lot for little use.
 - **Usage share** = their hours / everyone's hours.
-- **Allocated cost** = *Monthly server cost* × usage share; **margin** = revenue − allocated cost (only when a cost is configured in Settings).
+- **Running cost** = electricity + other fixed costs, where electricity = server watts × hours on per day × 30.44 days × price per kWh (Settings → Billing).
+- **Allocated cost** = running cost × usage share; **margin** = revenue − allocated cost (shown once a running cost is configured).
 - **Transcode %** and **requests** highlight CPU-heavy or request-heavy users.
 
 The *Everyone* view includes exempt users and users without a plan so you can see free usage.

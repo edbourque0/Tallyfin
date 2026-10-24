@@ -272,9 +272,17 @@ export interface ProfitabilityRow {
   requests_per_month_value: number | null;
 }
 
+export interface CostBreakdown {
+  kwh_per_month: number;
+  electricity_cost: number;
+  other_costs: number;
+  total: number;
+}
+
 export interface Profitability {
   currency: string;
   monthly_server_cost: number;
+  cost_breakdown: CostBreakdown;
   totals: {
     subscribers: number;
     paying: number;
@@ -300,6 +308,10 @@ export interface AppSettings {
   due_soon_days: number;
   grace_days: number;
   monthly_server_cost: number;
+  electricity_price_per_kwh: number;
+  server_watts: number;
+  server_hours_per_day: number;
+  cost_breakdown: CostBreakdown;
   sync_interval_minutes: number;
   reminders_enabled: boolean;
   reminder_time: string;

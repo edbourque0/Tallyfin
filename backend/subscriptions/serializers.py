@@ -228,6 +228,7 @@ class AppSettingsSerializer(serializers.ModelSerializer):
     tracearr_configured = serializers.BooleanField(read_only=True)
     seerr_configured = serializers.BooleanField(read_only=True)
     notification_channels = serializers.SerializerMethodField()
+    cost_breakdown = serializers.SerializerMethodField()
 
     class Meta:
         model = AppSettings
@@ -236,6 +237,9 @@ class AppSettingsSerializer(serializers.ModelSerializer):
 
     def get_notification_channels(self, s: AppSettings) -> list[str]:
         return configured_channels(s)
+
+    def get_cost_breakdown(self, s: AppSettings) -> dict[str, float]:
+        return s.monthly_cost_breakdown()
 
     def to_representation(self, instance: AppSettings):
         data = super().to_representation(instance)

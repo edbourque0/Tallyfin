@@ -3,8 +3,9 @@ Profitability: revenue versus actual usage per subscriber.
 
 For each subscriber we compare the normalised monthly revenue of their plan
 against the last 30 days of usage (Tracearr watch time / plays, Seerr requests).
-If a monthly server cost is configured it is allocated proportionally to watch
-time, which gives a per-subscriber margin. Revenue per hour watched is the
+The monthly running cost (electricity computed from the server's wattage, hours
+on per day and price per kWh, plus any other fixed costs) is allocated
+proportionally to watch time, which gives a per-subscriber margin. Revenue per hour watched is the
 primary ranking when no cost is configured.
 """
 
@@ -73,7 +74,8 @@ def compute_profitability(settings: AppSettings) -> dict[str, Any]:
             }
         )
 
-    cost = float(settings.monthly_server_cost or 0)
+    cost_breakdown = settings.monthly_cost_breakdown()
+    cost = cost_breakdown["total"]
     for row in rows:
         share = (row["hours_30d"] / total_hours) if total_hours > 0 else 0.0
         allocated = cost * share
@@ -104,6 +106,7 @@ def compute_profitability(settings: AppSettings) -> dict[str, Any]:
     return {
         "currency": settings.currency,
         "monthly_server_cost": cost,
+        "cost_breakdown": cost_breakdown,
         "totals": {
             "subscribers": len(rows),
             "paying": len(paying),

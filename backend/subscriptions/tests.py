@@ -232,6 +232,29 @@ class ProfitabilityTests(AuthenticatedTestCase):
         self.assertEqual(data["rows"][0]["name"], "idle")
 
 
+class RunningCostTests(AuthenticatedTestCase):
+    def test_electricity_cost_breakdown_feeds_profitability(self):
+        s = self.settings_row
+        s.server_watts = 120
+        s.server_hours_per_day = Decimal("24")
+        s.electricity_price_per_kwh = Decimal("0.15")
+        s.monthly_server_cost = Decimal("4.00")
+        s.save()
+        # 0.12 kW × 24 h × 30.4375 days = 87.66 kWh → × 0.15 = 13.15, plus 4.00 other = 17.15
+        breakdown = AppSettings.load().monthly_cost_breakdown()
+        self.assertEqual(breakdown, {"kwh_per_month": 87.7, "electricity_cost": 13.15, "other_costs": 4.0, "total": 17.15})
+
+        self.assertEqual(self.client.get("/api/settings/").json()["cost_breakdown"]["total"], 17.15)
+        data = self.client.get("/api/profitability/").json()
+        self.assertEqual(data["monthly_server_cost"], 17.15)
+        self.assertEqual(data["cost_breakdown"]["kwh_per_month"], 87.7)
+
+        # Half the day on, no other costs: electricity halves.
+        res = self.client.put("/api/settings/", {"server_hours_per_day": "12", "monthly_server_cost": 0}, format="json")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json()["cost_breakdown"]["total"], 6.57)
+
+
 class DashboardTests(AuthenticatedTestCase):
     def test_dashboard_without_integrations(self):
         plan = make_plan()

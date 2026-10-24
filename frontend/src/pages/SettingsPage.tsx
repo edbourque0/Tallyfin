@@ -1,6 +1,7 @@
 import { FormEvent, InputHTMLAttributes, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
+import { money } from '../lib/format';
 import type { AppSettings } from '../lib/types';
 import { Card, ErrorBanner, Field, Spinner, useToast } from '../components/ui';
 
@@ -124,13 +125,29 @@ export function SettingsPage() {
           <Field label="Grace period (days)" help="Days after the due date before a subscriber counts as overdue.">
             {number('grace_days', { min: 0 })}
           </Field>
-          <Field label="Monthly server cost" help="Optional. Allocated by watch-time share on the Profitability page.">
-            {number('monthly_server_cost', { min: 0, step: 0.01 })}
-          </Field>
           <Field label="Sync interval (minutes)" help="How often the scheduler refreshes users and usage.">
             {number('sync_interval_minutes', { min: 5 })}
           </Field>
         </div>
+      </Card>
+
+      <h2 className="section-title">Running cost</h2>
+      <Card subtitle="Used on the Profitability page: the monthly cost is split between subscribers by their share of watch time.">
+        <div className="field-row">
+          <Field label={`Electricity price (${form.currency || 'USD'} per kWh)`} help="From your utility bill, e.g. 0.12.">
+            {number('electricity_price_per_kwh', { min: 0, step: 0.0001 })}
+          </Field>
+          <Field label="Server power draw (watts)" help="Average draw of the machine while running, e.g. 120.">
+            {number('server_watts', { min: 0, step: 1 })}
+          </Field>
+          <Field label="Hours on per day" help="24 for an always-on server.">
+            {number('server_hours_per_day', { min: 0, max: 24, step: 0.5 })}
+          </Field>
+          <Field label="Other monthly costs" help="Optional: domain, storage, anything not electricity.">
+            {number('monthly_server_cost', { min: 0, step: 0.01 })}
+          </Field>
+        </div>
+        <CostPreview form={form} />
       </Card>
 
       <h2 className="section-title">Reminders</h2>
@@ -237,6 +254,22 @@ export function SettingsPage() {
         </button>
       </div>
     </form>
+  );
+}
+
+function CostPreview({ form }: { form: AppSettings }) {
+  const hours = Math.min(Math.max(Number(form.server_hours_per_day) || 0, 0), 24);
+  const kwh = ((Number(form.server_watts) || 0) / 1000) * hours * 30.4375;
+  const electricity = kwh * (Number(form.electricity_price_per_kwh) || 0);
+  const other = Number(form.monthly_server_cost) || 0;
+  const total = electricity + other;
+  const cur = form.currency || 'USD';
+  return (
+    <p className="help" style={{ marginTop: 12 }}>
+      ≈ <strong>{kwh.toFixed(1)} kWh</strong> per month → <strong>{money(electricity, cur)}</strong> electricity
+      {other > 0 ? ` + ${money(other, cur)} other` : ''} = <strong>{money(total, cur)}</strong> running cost per month
+      {total === 0 ? ' (margin stays hidden until a cost is set)' : ''}
+    </p>
   );
 }
 

@@ -1,0 +1,19 @@
+# Node
+node_modules/
+frontend/dist/
+
+# Python
+backend/.venv/
+backend/data/
+backend/staticfiles/
+__pycache__/
+*.pyc
+
+# Local config / data
+.env
+*.log
+.DS_Store
+
+# IDE
+.idea/
+.vscode/

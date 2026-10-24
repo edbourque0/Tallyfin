@@ -1,0 +1,74 @@
+# Production stack using the images published by .github/workflows/ci.yml.
+# No source checkout needed on the server: copy this file and .env, then
+#
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Required in .env (or the environment):
+#   IMAGE_PREFIX=ghcr.io/<github-user>/<repo>   (images are <prefix>-backend and <prefix>-frontend)
+#   IMAGE_TAG=latest | sha-<commit> | 1.2.3
+#
+# Pin a deploy to a commit:  IMAGE_TAG=sha-1a2b3c4 docker compose -f docker-compose.prod.yml up -d
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-subscriptions}
+      POSTGRES_USER: ${POSTGRES_USER:-subscriptions}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-subscriptions} -d ${POSTGRES_DB:-subscriptions}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    image: ${IMAGE_PREFIX:?set IMAGE_PREFIX, e.g. ghcr.io/your-user/tallyfin}-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-subscriptions}:${POSTGRES_PASSWORD:-change-me}@db:5432/${POSTGRES_DB:-subscriptions}
+      TZ: ${TZ:-UTC}
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8000"
+
+  scheduler:
+    image: ${IMAGE_PREFIX:?set IMAGE_PREFIX, e.g. ghcr.io/your-user/tallyfin}-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["python", "manage.py", "run_scheduler"]
+    healthcheck:
+      disable: true
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-subscriptions}:${POSTGRES_PASSWORD:-change-me}@db:5432/${POSTGRES_DB:-subscriptions}
+      TZ: ${TZ:-UTC}
+      RUN_MIGRATIONS: "0"
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+
+  frontend:
+    image: ${IMAGE_PREFIX:?set IMAGE_PREFIX, e.g. ghcr.io/your-user/tallyfin}-frontend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "${APP_PORT:-8080}:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres-data:

@@ -40,7 +40,9 @@ Create your plans under **Plans**, then open **Subscribers**, click *Edit* on a 
 | `scheduler` | Same image, runs `manage.py run_scheduler`: periodic sync + daily reminder digest |
 | `frontend`  | nginx serving the React build and proxying `/api/` and `/admin/` to the backend |
 
-Only the frontend publishes a port (`APP_PORT`, default 8080). Put it behind your reverse proxy if you want HTTPS, and set `CSRF_TRUSTED_ORIGINS`, `COOKIE_SECURE=1` and `BEHIND_HTTPS_PROXY=1` in `.env`.
+Only the frontend publishes a port (`APP_PORT`, default 8080). Put it behind your reverse proxy (Cloudflare Tunnel, Traefik, Nginx Proxy Manager, Caddy…) for HTTPS: the bundled nginx forwards the original scheme and host (`X-Forwarded-Proto`, or Cloudflare's `CF-Visitor`), so no extra configuration is needed. With Cloudflare Tunnel, point the tunnel's public hostname at `http://frontend:80` (cloudflared on the same Docker network) or at `http://<host>:8080`. Set `COOKIE_SECURE=1` once you are on HTTPS. If your proxy strips `X-Forwarded-Proto`, add the public URL to `CSRF_TRUSTED_ORIGINS`.
+
+All variables in `.env.example` can also be given as stack environment variables (Portainer, Dockge…); the `.env` file is optional.
 
 ## Deploying published images (GitHub Container Registry)
 

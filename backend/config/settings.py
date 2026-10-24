@@ -26,7 +26,7 @@ def env_list(name: str, default: str = "") -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-insecure-secret-key-change-me")
+SECRET_KEY = os.environ.get("SECRET_KEY") or "dev-insecure-secret-key-change-me"
 DEBUG = env_bool("DEBUG", False)
 
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "*")
@@ -77,16 +77,31 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-# Database: Postgres in docker-compose (DATABASE_URL), SQLite fallback for quick local runs.
+# Database. Preferred: separate POSTGRES_* variables (passwords with special characters
+# need no URL-encoding). Alternative: DATABASE_URL. Fallback: SQLite for quick local runs.
 DATA_DIR = Path(os.environ.get("DATA_DIR", BASE_DIR / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-DATABASES = {
-    "default": dj_database_url.config(
-        default="sqlite:///" + str(DATA_DIR / "db.sqlite3"),
-        conn_max_age=60,
-        conn_health_checks=True,
-    )
-}
+if os.environ.get("POSTGRES_HOST"):
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "HOST": os.environ["POSTGRES_HOST"],
+            "PORT": os.environ.get("POSTGRES_PORT") or "5432",
+            "NAME": os.environ.get("POSTGRES_DB") or "subscriptions",
+            "USER": os.environ.get("POSTGRES_USER") or "subscriptions",
+            "PASSWORD": os.environ.get("POSTGRES_PASSWORD") or "",
+            "CONN_MAX_AGE": 60,
+            "CONN_HEALTH_CHECKS": True,
+        }
+    }
+else:
+    DATABASES = {
+        "default": dj_database_url.config(
+            default="sqlite:///" + str(DATA_DIR / "db.sqlite3"),
+            conn_max_age=60,
+            conn_health_checks=True,
+        )
+    }
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -118,9 +133,14 @@ CSRF_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_HTTPONLY = False
 SESSION_COOKIE_SECURE = env_bool("COOKIE_SECURE", False)
 CSRF_COOKIE_SECURE = env_bool("COOKIE_SECURE", False)
-if env_bool("BEHIND_HTTPS_PROXY", False):
+
+# Reverse-proxy awareness. The bundled nginx forwards the original scheme and host
+# (X-Forwarded-Proto / X-Forwarded-Host, passing through what an outer HTTPS proxy sent),
+# so Django can compare the browser's Origin against the right scheme and host for CSRF.
+# Set TRUST_PROXY_HEADERS=0 only if the backend is exposed directly without the bundled nginx.
+if env_bool("TRUST_PROXY_HEADERS", True) or env_bool("BEHIND_HTTPS_PROXY", False):
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-USE_X_FORWARDED_HOST = env_bool("USE_X_FORWARDED_HOST", False)
+    USE_X_FORWARDED_HOST = True
 
 # CORS only matters if the frontend is served from another origin.
 CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", "")

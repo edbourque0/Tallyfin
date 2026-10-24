@@ -530,3 +530,41 @@ class JellyfinLogoutTests(TestCase):
         self.assertIn(("POST", "/Sessions/s1/Playing/Stop", None, None), calls)
         self.assertIn(("DELETE", "/Devices", {"id": "d1"}, None), calls)
         self.assertIn(("DELETE", "/Devices", {"id": "d2"}, None), calls)
+
+
+class ProxyCsrfTests(TestCase):
+    """Behind an HTTPS proxy (Cloudflare Tunnel, Traefik...) the forwarded scheme must satisfy CSRF origin checks."""
+
+    def setUp(self):
+        self.user = User.objects.create_superuser("admin", password="correct-horse-battery")
+
+    def _client(self):
+        from django.test import Client
+
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.user)
+        client.get("/api/auth/status/")  # sets the csrftoken cookie
+        return client, client.cookies["csrftoken"].value
+
+    def _put_settings(self, client, token, **headers):
+        return client.put(
+            "/api/settings/",
+            data='{"currency": "CAD"}',
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=token,
+            HTTP_HOST="tallyfin.example.com",
+            HTTP_ORIGIN="https://tallyfin.example.com",
+            **headers,
+        )
+
+    def test_https_origin_behind_proxy_is_accepted(self):
+        client, token = self._client()
+        res = self._put_settings(client, token, HTTP_X_FORWARDED_PROTO="https")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(AppSettings.load().currency, "CAD")
+
+    def test_https_origin_without_forwarded_proto_is_rejected(self):
+        client, token = self._client()
+        res = self._put_settings(client, token)
+        self.assertEqual(res.status_code, 403, res.content)
+        self.assertIn("Origin checking failed", res.json()["detail"])

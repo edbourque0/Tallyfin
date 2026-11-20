@@ -292,7 +292,7 @@ export function RemindersPage() {
       {preview && (
         <Modal title="Digest preview" onClose={() => setPreview(null)}>
           <div className="strong">{preview.title}</div>
-          <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0, color: 'var(--text-2)' }}>{preview.message}</pre>
+          <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0, color: 'var(--muted-foreground)' }}>{preview.message}</pre>
         </Modal>
       )}
     </div>

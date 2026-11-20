@@ -3,11 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <title>Tallyfin</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/logo.png" />
-    <meta name="theme-color" content="#16171c" />
+    <meta name="theme-color" content="#fcfbf9" />
+    <script>
+      (function () {
+        var t = null;
+        try { t = localStorage.getItem('tallyfin-theme'); } catch (e) {}
+        if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.dataset.theme = t;
+      })();
+    </script>
     <meta name="description" content="Tallyfin: subscription manager for Jellyfin" />
   </head>
   <body>

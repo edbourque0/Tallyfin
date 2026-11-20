@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Tallyfin">
   <defs>
     <linearGradient id="tallyfin-gradient" gradientUnits="userSpaceOnUse" x1="22" y1="18" x2="106" y2="118">
-      <stop offset="0" stop-color="#c084fc"/>
-      <stop offset="1" stop-color="#6366f1"/>
+      <stop offset="0" stop-color="#b57bf0"/>
+      <stop offset="1" stop-color="#7c3aed"/>
     </linearGradient>
   </defs>
   <!-- bell -->

@@ -72,14 +72,14 @@ export function ProfitabilityPage() {
             <div style={{ width: '100%', height: Math.max(180, chartRows.length * 30 + 30) }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartRows} layout="vertical" margin={{ top: 4, right: 24, left: 8, bottom: 4 }}>
-                  <CartesianGrid horizontal={false} stroke="var(--grid)" />
-                  <XAxis type="number" tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={{ stroke: 'var(--border-strong)' }} tickLine={false} tickFormatter={(v: number) => money(v, cur)} />
-                  <YAxis type="category" dataKey="name" width={110} tick={{ fill: 'var(--text-2)', fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <CartesianGrid horizontal={false} stroke="var(--border)" />
+                  <XAxis type="number" tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }} axisLine={{ stroke: 'var(--border)' }} tickLine={false} tickFormatter={(v: number) => money(v, cur)} />
+                  <YAxis type="category" dataKey="name" width={110} tick={{ fill: 'var(--muted-foreground)', fontSize: 12 }} axisLine={false} tickLine={false} />
                   <Tooltip
-                    contentStyle={{ background: 'var(--surface-3)', border: '1px solid var(--border-strong)', borderRadius: 8, fontSize: 12.5 }}
-                    labelStyle={{ color: 'var(--muted)' }}
-                    itemStyle={{ color: 'var(--text)' }}
-                    cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+                    contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, boxShadow: 'var(--shadow-md)', color: 'var(--popover-foreground)' }}
+                    labelStyle={{ color: 'var(--muted-foreground)' }}
+                    itemStyle={{ color: 'var(--foreground)' }}
+                    cursor={{ fill: 'var(--accent)', fillOpacity: 0.6 }}
                     formatter={(value, _name, item) => {
                       const payload = (item as { payload?: { hours: number; revenue: number } }).payload;
                       const extra = payload ? ` (${money(payload.revenue, cur)}/mo · ${hours(payload.hours)})` : '';
@@ -88,7 +88,7 @@ export function ProfitabilityPage() {
                   />
                   <Bar dataKey="value" radius={[0, 4, 4, 0]} maxBarSize={18}>
                     {chartRows.map((r) => (
-                      <Cell key={r.name} fill={hasCost && r.value < 0 ? 'var(--critical)' : 'var(--series-1)'} />
+                      <Cell key={r.name} fill={hasCost && r.value < 0 ? 'var(--destructive)' : 'var(--chart-1)'} />
                     ))}
                   </Bar>
                 </BarChart>

@@ -58,7 +58,7 @@ export function SubscriberDetailPage() {
           <Avatar name={s.name} url={s.avatar_url} large />
           <div>
             <div className="row">
-              <h1>{s.name}</h1>
+              <h1 className="page-title" style={{ marginBottom: 0, fontSize: 32, lineHeight: "40px" }}>{s.name}</h1>
               <StatusBadge status={s.status} label={s.status_label} />
               {s.is_admin && <span className="tag">Jellyfin admin</span>}
               {s.is_disabled && <span className="tag">{s.access_disabled_by_app ? 'disabled by Tallyfin' : 'disabled in Jellyfin'}</span>}

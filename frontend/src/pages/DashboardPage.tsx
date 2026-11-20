@@ -7,9 +7,9 @@ import type { Dashboard } from '../lib/types';
 import { Avatar, Banner, Card, EmptyState, ErrorBanner, Spinner, StatTile, StatusBadge } from '../components/ui';
 
 const TOOLTIP_STYLE = {
-  contentStyle: { background: 'var(--surface-3)', border: '1px solid var(--border-strong)', borderRadius: 8, fontSize: 12.5 },
-  labelStyle: { color: 'var(--muted)' },
-  itemStyle: { color: 'var(--text)' },
+  contentStyle: { background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, boxShadow: 'var(--shadow-md)', color: 'var(--popover-foreground)' },
+  labelStyle: { color: 'var(--muted-foreground)' },
+  itemStyle: { color: 'var(--foreground)' },
 };
 
 export function DashboardPage() {
@@ -88,11 +88,11 @@ export function DashboardPage() {
           <div className="chart">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                <CartesianGrid vertical={false} stroke="var(--grid)" />
-                <XAxis dataKey="label" tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={{ stroke: 'var(--border-strong)' }} tickLine={false} />
-                <YAxis tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} width={44} tickFormatter={(v: number) => money(v, cur).replace(/\.00$/, '')} />
-                <Tooltip {...TOOLTIP_STYLE} cursor={{ fill: 'rgba(255,255,255,0.04)' }} formatter={(value) => [money(Number(value), cur), 'Collected']} />
-                <Bar dataKey="amount" fill="var(--series-1)" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <CartesianGrid vertical={false} stroke="var(--border)" />
+                <XAxis dataKey="label" tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }} axisLine={{ stroke: 'var(--border)' }} tickLine={false} />
+                <YAxis tick={{ fill: 'var(--muted-foreground)', fontSize: 11 }} axisLine={false} tickLine={false} width={44} tickFormatter={(v: number) => money(v, cur).replace(/\.00$/, '')} />
+                <Tooltip {...TOOLTIP_STYLE} cursor={{ fill: 'var(--accent)', fillOpacity: 0.6 }} formatter={(value) => [money(Number(value), cur), 'Collected']} />
+                <Bar dataKey="amount" fill="var(--chart-1)" radius={[4, 4, 0, 0]} maxBarSize={28} />
               </BarChart>
             </ResponsiveContainer>
           </div>

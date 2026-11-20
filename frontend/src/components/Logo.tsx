@@ -1,11 +1,11 @@
-/** Tallyfin mark: a jellyfish whose tentacles are a tally of five. */
+/** Tallyfin mark: a jellyfish whose tentacles are a tally of five. Colours follow the theme's ribbon. */
 export function Logo({ size = 32, className }: { size?: number; className?: string }) {
   return (
     <svg viewBox="0 0 128 128" width={size} height={size} className={className} aria-hidden="true" focusable="false">
       <defs>
         <linearGradient id="tallyfin-gradient" gradientUnits="userSpaceOnUse" x1="22" y1="18" x2="106" y2="118">
-          <stop offset="0" stopColor="#c084fc" />
-          <stop offset="1" stopColor="#6366f1" />
+          <stop offset="0" style={{ stopColor: 'var(--logo-from)' }} />
+          <stop offset="1" style={{ stopColor: 'var(--logo-to)' }} />
         </linearGradient>
       </defs>
       <path
@@ -23,10 +23,7 @@ export function Logo({ size = 32, className }: { size?: number; className?: stri
   );
 }
 
+/** Wordmark: "Tallyfin" in Geist 600 followed by a ribbon square dot. */
 export function Wordmark({ className }: { className?: string }) {
-  return (
-    <span className={`wordmark ${className ?? ''}`}>
-      Tally<span className="fin">fin</span>
-    </span>
-  );
+  return <span className={`wordmark ${className ?? ''}`}>Tallyfin</span>;
 }

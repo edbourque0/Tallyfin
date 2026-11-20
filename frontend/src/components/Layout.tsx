@@ -5,6 +5,8 @@ import { api } from '../lib/api';
 import { relative } from '../lib/format';
 import { useToast } from './ui';
 import { Logo, Wordmark } from './Logo';
+import { Avatar } from './ui';
+import { useTheme } from '../lib/theme';
 
 const ICONS = {
   dashboard: (
@@ -28,6 +30,15 @@ const ICONS = {
   settings: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
   ),
+  sun: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></svg>
+  ),
+  moon: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" /></svg>
+  ),
+  logout: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
+  ),
   sync: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
   ),
@@ -49,7 +60,7 @@ const TITLES: Record<string, string> = {
   '/plans': 'Plans',
   '/payments': 'Payments',
   '/profitability': 'Profitability',
-  '/reminders': 'Reminders & access',
+  '/reminders': 'Reminders and access',
   '/settings': 'Settings',
 };
 
@@ -88,7 +99,7 @@ export function SyncButton() {
 
   return (
     <button
-      className="btn"
+      className="btn btn-sm"
       onClick={() => run.mutate()}
       disabled={running || run.isPending}
       title={status.data?.last_sync_at ? `Last sync ${relative(status.data.last_sync_at)}` : 'Never synced'}
@@ -101,22 +112,28 @@ export function SyncButton() {
 
 export function Layout({ username, onLogout, children }: { username: string | null; onLogout: () => void; children: React.ReactNode }) {
   const location = useLocation();
+  const { theme, toggle } = useTheme();
   const base = '/' + (location.pathname.split('/')[1] ?? '');
-  const title = location.pathname.startsWith('/subscribers/') ? 'Subscriber' : (TITLES[base] ?? 'Jellyfin Subscriptions');
+  const isDetail = location.pathname.startsWith('/subscribers/');
+  const title = isDetail ? 'Subscriber' : (TITLES[base] ?? 'Tallyfin');
+  const section = TITLES[base] ?? 'Tallyfin';
 
   return (
     <div className="app">
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-logo">
-            <Logo size={36} />
+            <Logo size={30} />
           </div>
           <div>
             <div className="brand-name">
               <Wordmark />
             </div>
-            <div className="brand-sub">subscriptions for Jellyfin</div>
+            <div className="brand-sub">Subscriptions for Jellyfin</div>
           </div>
+        </div>
+        <div className="nav-section">
+          <span className="caps-label">Manage</span>
         </div>
         {NAV.map((item) => (
           <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
@@ -125,20 +142,46 @@ export function Layout({ username, onLogout, children }: { username: string | nu
           </NavLink>
         ))}
         <div className="nav-footer">
-          <span>Signed in as {username ?? '—'}</span>
-          <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start' }} onClick={onLogout}>
-            Sign out
+          <Avatar name={username ?? '?'} />
+          <div className="who">
+            <div className="name">{username ?? '—'}</div>
+            <div className="sub">Administrator</div>
+          </div>
+          <button
+            className="icon-btn"
+            onClick={toggle}
+            aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            title={theme === 'dark' ? 'Light theme' : 'Dark theme'}
+          >
+            {theme === 'dark' ? ICONS.sun : ICONS.moon}
+          </button>
+          <button className="icon-btn" onClick={onLogout} aria-label="Sign out" title="Sign out">
+            {ICONS.logout}
           </button>
         </div>
       </aside>
       <div className="main">
         <header className="topbar">
-          <h1>{title}</h1>
+          <h1>
+            {isDetail ? (
+              <>
+                <NavLink to="/subscribers" style={{ color: 'inherit', textDecoration: 'none' }}>
+                  Subscribers
+                </NavLink>{' '}
+                / Subscriber
+              </>
+            ) : (
+              <>Tallyfin / {section}</>
+            )}
+          </h1>
           <div className="topbar-actions">
             <SyncButton />
           </div>
         </header>
-        <main className="content">{children}</main>
+        <main className="content">
+          {!isDetail && <h2 className="page-title">{title}</h2>}
+          {children}
+        </main>
       </div>
     </div>
   );

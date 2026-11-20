@@ -117,7 +117,7 @@ def build_digest(items: list[dict[str, Any]], on: date) -> tuple[str, str]:
         lines.append("OVERDUE")
         for item in overdue:
             days = -item["days_until_due"]
-            lines.append(f"{describe(item)} — {days} day{'s' if days != 1 else ''} overdue (was due {item['due_date']})")
+            lines.append(f"{describe(item)} — {days} day{'s' if days != 1 else ''} overdue (was due {_human(item['due_date'])})")
         lines.append("")
     if today_items:
         lines.append("DUE TODAY")
@@ -162,3 +162,10 @@ def run_reminders(force: bool = False, dry_run: bool = False) -> dict[str, Any]:
             )
     logger.info("Reminders: %d items, channels=%s", len(items), results)
     return {"sent": len(items) if delivered else 0, "channels": results, "title": title, "message": message, "items": items}
+
+
+def _human(iso: str | None) -> str:
+    if not iso:
+        return ""
+    d = date.fromisoformat(iso)
+    return f"{d:%b} {d.day}, {d.year}"

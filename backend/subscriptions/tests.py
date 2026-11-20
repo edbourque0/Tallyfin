@@ -711,6 +711,18 @@ class SafeRemovalTests(AuthenticatedTestCase):
         sub.refresh_from_db()
         self.assertEqual(sub.next_payment_date, today)
 
+    def test_deleting_a_late_payment_restores_the_missed_due_date(self):
+        plan = make_plan()
+        today = timezone.localdate()
+        missed = today - timezone.timedelta(days=12)
+        sub = make_sub("dave", plan=plan, next_payment_date=missed)
+        # Late payer: the period starts today, but the due date that gets replaced is the missed one.
+        payment = self.client.post(f"/api/subscribers/{sub.pk}/payments/", {}, format="json").json()["payment"]
+        res = self.client.delete(f"/api/payments/{payment['id']}/")
+        self.assertTrue(res.json()["due_date_reverted"])
+        sub.refresh_from_db()
+        self.assertEqual(sub.next_payment_date, missed)  # still overdue, not quietly forgiven
+
     def test_deleting_older_payment_leaves_due_date(self):
         plan = make_plan()
         today = timezone.localdate()
@@ -723,3 +735,31 @@ class SafeRemovalTests(AuthenticatedTestCase):
         self.assertFalse(res.json()["due_date_reverted"])
         sub.refresh_from_db()
         self.assertEqual(sub.next_payment_date, due)
+
+
+class ConnectionStateTests(AuthenticatedTestCase):
+    def test_states_come_from_the_last_sync_not_from_having_a_url(self):
+        from subscriptions.models import SyncRun
+
+        s = self.settings_row
+        s.jellyfin_url, s.jellyfin_api_key = "http://media.lan", "k"
+        s.tracearr_url, s.tracearr_api_key = "http://t.lan", "k"
+        s.save()
+        conns = self.client.get("/api/settings/").json()["connections"]
+        self.assertEqual(conns["jellyfin"]["state"], "unknown")
+        self.assertEqual(conns["seerr"]["state"], "not_configured")
+
+        run = SyncRun.objects.create(
+            ok=False,
+            result={
+                "jellyfin": {"ok": False, "error": "Can't reach Jellyfin at media.lan.", "kind": "unreachable", "detail": "x"},
+                "tracearr": {"ok": True},
+            },
+        )
+        run.finished_at = timezone.now()
+        run.save()
+        conns = self.client.get("/api/sync/").json()["connections"]
+        self.assertEqual(conns["jellyfin"]["state"], "error")
+        self.assertEqual(conns["jellyfin"]["kind"], "unreachable")
+        self.assertEqual(conns["tracearr"]["state"], "ok")
+        self.assertEqual(self.client.get("/api/enforcement/").json()["jellyfin_connection"]["state"], "error")

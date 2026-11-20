@@ -3,9 +3,9 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api } from '../lib/api';
-import { hours, money, percent, relative } from '../lib/format';
+import { hours, money, percent, plural, relative } from '../lib/format';
 import type { Profitability, ProfitabilityRow } from '../lib/types';
-import { Banner, Card, EmptyState, ErrorBanner, Progress, Spinner, StatTile, StatusBadge, useSort } from '../components/ui';
+import { Banner, Card, EmptyState, ErrorBanner, Progress, Spinner, StatTile, StatusBadge, useSort, SortHeader } from '../components/ui';
 
 type View = 'paying' | 'all';
 
@@ -17,7 +17,8 @@ export function ProfitabilityPage() {
     const all = query.data?.rows ?? [];
     return view === 'paying' ? all.filter((r) => r.is_paying) : all;
   }, [query.data, view]);
-  const { sorted, toggle, indicator } = useSort<ProfitabilityRow>(rows, 'rank');
+  const { sorted, toggle, key: sortKey, dir: sortDir } = useSort<ProfitabilityRow>(rows, 'rank');
+  const profSort = { key: sortKey, dir: sortDir, toggle };
 
   if (query.isLoading) return <Spinner label="Crunching numbers…" />;
   if (query.error) return <ErrorBanner error={query.error} onRetry={() => query.refetch()} retrying={query.isFetching} />;
@@ -25,6 +26,7 @@ export function ProfitabilityPage() {
   const cur = data.currency;
   const hasCost = data.monthly_server_cost > 0;
   const hasUsage = data.rows.some((r) => r.has_usage_data);
+  const hasRequests = data.rows.some((r) => r.requests_30d > 0);
 
   const chartRows = data.rows
     .filter((r) => r.is_paying && r.has_usage_data)
@@ -41,14 +43,17 @@ export function ProfitabilityPage() {
       )}
       <div className="grid grid-kpi">
         <StatTile label="Monthly recurring revenue" value={money(data.totals.mrr, cur)} hint={`${data.totals.paying} paying of ${data.totals.subscribers}`} />
-        <StatTile label="Watch time (30d)" value={hours(data.totals.hours_30d)} hint={`${data.totals.plays_30d} plays · ${data.totals.requests_30d} requests`} />
-        <StatTile label="Revenue per hour watched" value={data.totals.avg_revenue_per_hour != null ? money(data.totals.avg_revenue_per_hour, cur) : '—'} hint="MRR ÷ total hours, last 30 days" />
-        <StatTile
-          label="Free usage (30d)"
-          value={hours(data.totals.free_hours_30d)}
-          hint={data.totals.free_hours_30d > 0 ? 'watched by non-paying users' : 'no free riders'}
-          hintKind={data.totals.free_hours_30d > 0 ? 'critical' : 'good'}
-        />
+        {hasUsage && (
+          <>
+            <StatTile label="Watch time (30d)" value={hours(data.totals.hours_30d)} hint={`${plural(data.totals.plays_30d, 'play')} · ${plural(data.totals.requests_30d, 'request')}`} />
+            <StatTile label="Revenue per hour watched" value={data.totals.avg_revenue_per_hour != null ? money(data.totals.avg_revenue_per_hour, cur) : '—'} hint="Monthly revenue ÷ hours watched, last 30 days" />
+            <StatTile
+              label="Watched for free (30d)"
+              value={hours(data.totals.free_hours_30d)}
+              hint={data.totals.free_hours_30d > 0 ? 'by people without a paid plan' : 'everyone watching pays'}
+            />
+          </>
+        )}
         {hasCost ? (
           <StatTile
             label="Monthly margin"
@@ -61,6 +66,7 @@ export function ProfitabilityPage() {
         )}
       </div>
 
+      {hasUsage && (
       <div className="grid grid-2">
         <Card
           title={hasCost ? 'Margin per subscriber' : 'Revenue per hour watched'}
@@ -95,11 +101,15 @@ export function ProfitabilityPage() {
               </ResponsiveContainer>
             </div>
           )}
-          {hasCost && <div className="small text-muted" style={{ marginTop: 8 }}>Red bars are subscribers whose allocated cost exceeds what they pay.</div>}
+          {hasCost && chartRows.length > 0 && (
+            <div className="small text-muted" style={{ marginTop: 8 }}>
+              Red bars are subscribers whose share of the running cost is more than what they pay.
+            </div>
+          )}
         </Card>
 
         <Card title="How to read this">
-          <div className="stack small text-2">
+          <div className="stack small text-2 prose">
             <p>
               <strong>Revenue per hour</strong> divides a subscriber's monthly plan value by the hours they watched in the last 30 days. A high number means they pay a lot for little usage (cheap to serve); a low number means heavy use for the price.
             </p>
@@ -115,13 +125,14 @@ export function ProfitabilityPage() {
           </div>
         </Card>
       </div>
+      )}
 
       <div className="row-between">
-        <div className="pill-tabs">
-          <button className={view === 'paying' ? 'active' : ''} onClick={() => setView('paying')}>
+        <div className="pill-tabs" role="group" aria-label="Who to include">
+          <button className={view === 'paying' ? 'active' : ''} aria-pressed={view === 'paying'} onClick={() => setView('paying')}>
             Paying subscribers
           </button>
-          <button className={view === 'all' ? 'active' : ''} onClick={() => setView('all')}>
+          <button className={view === 'all' ? 'active' : ''} aria-pressed={view === 'all'} onClick={() => setView('all')}>
             Everyone
           </button>
         </div>
@@ -131,19 +142,19 @@ export function ProfitabilityPage() {
         <table>
           <thead>
             <tr>
-              <th className="num sortable" onClick={() => toggle('rank')}>#{indicator('rank')}</th>
-              <th className="sortable" onClick={() => toggle('name')}>Subscriber{indicator('name')}</th>
+              <SortHeader<ProfitabilityRow> label="Rank" column="rank" sort={profSort} className="num" />
+              <SortHeader<ProfitabilityRow> label="Subscriber" column="name" sort={profSort} />
               <th>Plan</th>
-              <th className="num sortable" onClick={() => toggle('monthly_revenue', 'desc')}>Revenue / mo{indicator('monthly_revenue')}</th>
-              <th className="num sortable" onClick={() => toggle('paid_last_12m', 'desc')}>Paid 12m{indicator('paid_last_12m')}</th>
-              <th className="num sortable" onClick={() => toggle('hours_30d', 'desc')}>Hours 30d{indicator('hours_30d')}</th>
-              <th className="sortable" onClick={() => toggle('usage_share_pct', 'desc')}>Usage share{indicator('usage_share_pct')}</th>
-              <th className="num sortable" onClick={() => toggle('plays_30d', 'desc')}>Plays{indicator('plays_30d')}</th>
-              <th className="num sortable" onClick={() => toggle('transcode_pct', 'desc')}>Transcode{indicator('transcode_pct')}</th>
-              <th className="num sortable" onClick={() => toggle('requests_30d', 'desc')}>Requests{indicator('requests_30d')}</th>
-              <th className="num sortable" onClick={() => toggle('revenue_per_hour', 'desc')}>Per hour{indicator('revenue_per_hour')}</th>
-              {hasCost && <th className="num sortable" onClick={() => toggle('margin', 'desc')}>Margin{indicator('margin')}</th>}
-              <th className="sortable" onClick={() => toggle('last_watched_at', 'desc')}>Last watched{indicator('last_watched_at')}</th>
+              <SortHeader<ProfitabilityRow> label="Revenue / mo" column="monthly_revenue" sort={profSort} defaultDir="desc" className="num" />
+              <SortHeader<ProfitabilityRow> label="Paid 12m" column="paid_last_12m" sort={profSort} defaultDir="desc" className="num" />
+              {hasUsage && <SortHeader<ProfitabilityRow> label="Hours 30d" column="hours_30d" sort={profSort} defaultDir="desc" className="num" />}
+              {hasUsage && <SortHeader<ProfitabilityRow> label="Usage share" column="usage_share_pct" sort={profSort} defaultDir="desc" />}
+              {hasUsage && <SortHeader<ProfitabilityRow> label="Plays" column="plays_30d" sort={profSort} defaultDir="desc" className="num" />}
+              {hasUsage && <SortHeader<ProfitabilityRow> label="Transcode" column="transcode_pct" sort={profSort} defaultDir="desc" className="num" />}
+              {hasRequests && <SortHeader<ProfitabilityRow> label="Requests" column="requests_30d" sort={profSort} defaultDir="desc" className="num" />}
+              {hasUsage && <SortHeader<ProfitabilityRow> label="Per hour" column="revenue_per_hour" sort={profSort} defaultDir="desc" className="num" />}
+              {hasCost && hasUsage && <SortHeader<ProfitabilityRow> label="Margin" column="margin" sort={profSort} defaultDir="desc" className="num" />}
+              {hasUsage && <SortHeader<ProfitabilityRow> label="Last watched" column="last_watched_at" sort={profSort} defaultDir="desc" />}
             </tr>
           </thead>
           <tbody>
@@ -159,19 +170,25 @@ export function ProfitabilityPage() {
                 <td>{r.plan ?? <span className="text-muted">—</span>}</td>
                 <td className="num">{r.is_paying ? money(r.monthly_revenue, cur) : <span className="text-muted">free</span>}</td>
                 <td className="num">{money(r.paid_last_12m, cur)}</td>
-                <td className="num">{r.has_usage_data ? hours(r.hours_30d) : <span className="text-muted">—</span>}</td>
-                <td>
-                  <div className="row" style={{ flexWrap: 'nowrap' }}>
-                    <Progress value={r.usage_share_pct} max={100} />
-                    <span className="small mono">{percent(r.usage_share_pct)}</span>
-                  </div>
-                </td>
-                <td className="num">{r.has_usage_data ? r.plays_30d : '—'}</td>
-                <td className="num">{r.has_usage_data && r.plays_30d > 0 ? percent(r.transcode_pct) : '—'}</td>
-                <td className="num">{r.requests_30d}</td>
-                <td className="num">{r.revenue_per_hour != null ? money(r.revenue_per_hour, cur) : r.is_paying && r.has_usage_data ? <span className="text-good" title="Pays but did not watch anything">no usage</span> : '—'}</td>
-                {hasCost && <td className={`num ${r.margin < 0 ? 'text-critical' : ''}`}>{money(r.margin, cur)}</td>}
-                <td className="small text-muted">{r.last_watched_at ? relative(r.last_watched_at) : r.has_usage_data ? 'never' : '—'}</td>
+                {hasUsage && <td className="num">{r.has_usage_data ? hours(r.hours_30d) : <span className="text-muted">—</span>}</td>}
+                {hasUsage && (
+                  <td>
+                    <div className="row" style={{ flexWrap: 'nowrap' }}>
+                      <Progress value={r.usage_share_pct} max={100} />
+                      <span className="small mono">{percent(r.usage_share_pct)}</span>
+                    </div>
+                  </td>
+                )}
+                {hasUsage && <td className="num">{r.has_usage_data ? r.plays_30d : '—'}</td>}
+                {hasUsage && <td className="num">{r.has_usage_data && r.plays_30d > 0 ? percent(r.transcode_pct) : '—'}</td>}
+                {hasRequests && <td className="num">{r.requests_30d}</td>}
+                {hasUsage && (
+                  <td className="num">
+                    {r.revenue_per_hour != null ? money(r.revenue_per_hour, cur) : r.is_paying && r.has_usage_data ? <span className="text-muted">didn't watch</span> : '—'}
+                  </td>
+                )}
+                {hasCost && hasUsage && <td className={`num ${r.margin < 0 ? 'text-critical' : ''}`}>{money(r.margin, cur)}</td>}
+                {hasUsage && <td className="small text-muted">{r.last_watched_at ? relative(r.last_watched_at) : r.has_usage_data ? 'Not yet' : '—'}</td>}
               </tr>
             ))}
           </tbody>

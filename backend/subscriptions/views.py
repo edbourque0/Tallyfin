@@ -133,15 +133,50 @@ class ChangePasswordView(APIView):
 # ----------------------------------------------------------------------------- settings
 
 
+def connection_states(settings: AppSettings) -> dict[str, dict]:
+    """What the last finished sync learned about each integration.
+
+    state: "ok" (answered), "error" (failed: message/kind/detail say why), "unknown" (configured
+    but not checked by a sync yet) or "not_configured". This is what the UI shows as
+    Connected / Not reachable / Not checked yet / Not set up, instead of "has a URL".
+    """
+    last = SyncRun.objects.exclude(finished_at=None).order_by("-started_at").first()
+    configured = {
+        "jellyfin": settings.jellyfin_configured,
+        "tracearr": settings.tracearr_configured,
+        "seerr": settings.seerr_configured,
+    }
+    out: dict[str, dict] = {}
+    for service, is_configured in configured.items():
+        if not is_configured:
+            out[service] = {"state": "not_configured"}
+            continue
+        part = (last.result or {}).get(service) if last else None
+        if not part or part.get("skipped") or part.get("kind") == "not_configured":
+            out[service] = {"state": "unknown"}
+        elif part.get("ok"):
+            out[service] = {"state": "ok", "checked_at": last.finished_at}
+        else:
+            out[service] = {
+                "state": "error",
+                "message": part.get("error") or f"The last {service} sync failed.",
+                "kind": part.get("kind") or "error",
+                "detail": part.get("detail") or "",
+                "checked_at": last.finished_at,
+            }
+    return out
+
+
 class SettingsView(APIView):
     def get(self, request):
-        return Response(AppSettingsSerializer(AppSettings.load()).data)
+        settings = AppSettings.load()
+        return Response({**AppSettingsSerializer(settings).data, "connections": connection_states(settings)})
 
     def put(self, request):
         serializer = AppSettingsSerializer(AppSettings.load(), data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
+        settings = serializer.save()
+        return Response({**serializer.data, "connections": connection_states(settings)})
 
 
 class TestConnectionView(APIView):
@@ -300,6 +335,9 @@ class RecordPaymentView(APIView):
             note=data.get("note") or "",
         )
         if data.get("advance_due_date", True) and period_end:
+            payment.moved_due_date = True
+            payment.replaced_due_date = sub.next_payment_date
+            payment.save(update_fields=["moved_due_date", "replaced_due_date"])
             sub.next_payment_date = period_end
         if not sub.subscription_start:
             sub.subscription_start = period_start
@@ -442,13 +480,14 @@ class PaymentListView(APIView):
 
 class PaymentDetailView(APIView):
     def delete(self, request, pk: int):
-        """Delete a payment. If it is the payment that set the current due date, the due date moves back
-        to where it was before (the start of that payment's period)."""
+        """Delete a payment. If it is the payment that set the current due date, the due date goes back
+        to exactly what it was before that payment was recorded (an overdue date stays overdue).
+        Payments recorded before this was tracked leave the due date alone rather than guess."""
         payment = get_object_or_404(Payment.objects.select_related("subscriber"), pk=pk)
         sub = payment.subscriber
         reverted = False
-        if payment.period_start and payment.period_end and sub.next_payment_date == payment.period_end:
-            sub.next_payment_date = payment.period_start
+        if payment.moved_due_date and payment.period_end and sub.next_payment_date == payment.period_end:
+            sub.next_payment_date = payment.replaced_due_date
             sub.save(update_fields=["next_payment_date", "updated_at"])
             reverted = True
         payment.delete()
@@ -552,6 +591,7 @@ class SyncView(APIView):
             {
                 "running": is_sync_running(),
                 "last_sync_at": settings.last_sync_at,
+                "connections": connection_states(settings),
                 "runs": SyncRunSerializer(runs, many=True).data,
             }
         )
@@ -578,6 +618,7 @@ class EnforcementView(APIView):
                 "reenable_on_payment": settings.auto_reenable_on_payment,
                 "disable_message": settings.disable_message,
                 "jellyfin_configured": settings.jellyfin_configured,
+                "jellyfin_connection": connection_states(settings)["jellyfin"],
                 "pending_disable": [{"subscriber_id": s.pk, "name": s.name, "reason": r} for s, r in pending_disable],
                 "pending_enable": [{"subscriber_id": s.pk, "name": s.name, "reason": r} for s, r in pending_enable],
                 "events": AccessEventSerializer(AccessEvent.objects.select_related("subscriber")[:50], many=True).data,

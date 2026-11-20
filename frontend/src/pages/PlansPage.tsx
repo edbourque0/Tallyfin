@@ -1,9 +1,9 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { money } from '../lib/format';
+import { money, plural } from '../lib/format';
 import type { AppSettings, DurationUnit, Plan } from '../lib/types';
-import { Card, ConfirmDialog, EmptyState, ErrorBanner, Field, Modal, Spinner, useToast } from '../components/ui';
+import { Card, ConfirmDialog, EmptyState, ErrorBanner, Field, Modal, Spinner, useElementWidth, useToast } from '../components/ui';
 
 interface PlanForm {
   name: string;
@@ -37,6 +37,8 @@ export function PlansPage() {
   const [modal, setModal] = useState<{ plan: Plan | null } | null>(null);
 
   const [confirmDelete, setConfirmDelete] = useState<Plan | null>(null);
+  const [wrapRef, width] = useElementWidth<HTMLDivElement>();
+  const narrow = width > 0 && width < 680;
   const remove = useMutation({
     mutationFn: (plan: Plan) => api.del(`/api/plans/${plan.id}/`),
     onSuccess: (_data, plan) => {
@@ -74,7 +76,7 @@ export function PlansPage() {
   const list = plans.data ?? [];
 
   return (
-    <div className="stack">
+    <div className="stack" ref={wrapRef}>
       <div className="row-between">
         <p className="text-muted">A plan is a price for a period of access. Assign one to each subscriber; recording a payment extends their due date by one period.</p>
         <button className="btn btn-primary" onClick={() => setModal({ plan: null })}>
@@ -86,57 +88,45 @@ export function PlansPage() {
           <EmptyState title="No plans yet">Create your first plan, for example “Monthly – 10 USD / month” or “Yearly – 100 USD / year”.</EmptyState>
         </Card>
       ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Plan</th>
-                <th className="num">Price</th>
-                <th>Period</th>
-                <th className="num">≈ per month</th>
-                <th className="num">Subscribers</th>
-                <th>Status</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((p) => (
-                <tr key={p.id}>
-                  <td>
-                    <div className="strong">{p.name}</div>
-                    {p.description && <div className="small text-muted">{p.description}</div>}
-                  </td>
-                  <td className="num strong">{money(p.price, p.currency)}</td>
-                  <td>every {p.duration_label}</td>
-                  <td className="num">{money(p.monthly_price, p.currency)}</td>
-                  <td className="num">{p.subscriber_count}</td>
-                  <td>{p.is_active ? <span className="badge badge-active">active</span> : <span className="badge badge-neutral">archived</span>}</td>
-                  <td>
-                    <div className="actions">
-                      <button className="btn btn-sm" onClick={() => setModal({ plan: p })}>
-                        Edit
-                      </button>
-                      {p.is_active ? (
-                        <button className="btn btn-sm" onClick={() => setActive.mutate({ plan: p, active: false })} disabled={setActive.isPending}>
-                          Archive
-                        </button>
-                      ) : (
-                        <button className="btn btn-sm" onClick={() => setActive.mutate({ plan: p, active: true })} disabled={setActive.isPending}>
-                          Restore
-                        </button>
-                      )}
-                      {!p.is_active && p.subscriber_count === 0 && (
-                        <button className="btn btn-sm btn-ghost btn-danger" onClick={() => setConfirmDelete(p)}>
-                          Delete…
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ul className={`plan-list ${narrow ? 'is-narrow' : ''}`}>
+          {list.map((p) => (
+            <li className="plan-row" key={p.id}>
+              <div className="plan-name">
+                <div className="row" style={{ gap: 8 }}>
+                  <span className="strong">{p.name}</span>
+                  {!p.is_active && <span className="badge badge-neutral">Archived</span>}
+                </div>
+                {p.description && <div className="small text-muted">{p.description}</div>}
+              </div>
+              <div className="plan-price">
+                <div className="strong mono">
+                  {money(p.price, p.currency)} <span className="text-muted" style={{ fontWeight: 400 }}>every {p.duration_label}</span>
+                </div>
+                {p.duration_label !== 'month' && <div className="small text-muted">≈&nbsp;{money(p.monthly_price, p.currency)} a month</div>}
+              </div>
+              <div className="plan-count small text-muted">{plural(p.subscriber_count, 'subscriber')}</div>
+              <div className="actions plan-actions">
+                <button className="btn btn-sm" onClick={() => setModal({ plan: p })} aria-label={`Edit ${p.name}`}>
+                  Edit
+                </button>
+                {p.is_active ? (
+                  <button className="btn btn-sm" onClick={() => setActive.mutate({ plan: p, active: false })} disabled={setActive.isPending} aria-label={`Archive ${p.name}`}>
+                    Archive
+                  </button>
+                ) : (
+                  <button className="btn btn-sm" onClick={() => setActive.mutate({ plan: p, active: true })} disabled={setActive.isPending} aria-label={`Restore ${p.name}`}>
+                    Restore
+                  </button>
+                )}
+                {!p.is_active && p.subscriber_count === 0 && (
+                  <button className="btn btn-sm btn-ghost btn-danger" onClick={() => setConfirmDelete(p)} aria-label={`Delete ${p.name}`}>
+                    Delete…
+                  </button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
       {confirmDelete && (
         <ConfirmDialog

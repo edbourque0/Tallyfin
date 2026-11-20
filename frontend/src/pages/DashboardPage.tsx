@@ -6,6 +6,7 @@ import { api } from '../lib/api';
 import { dateShort, daysLabel, money, monthLabel, relative } from '../lib/format';
 import type { Dashboard, Subscriber } from '../lib/types';
 import { PaymentModal } from '../components/SubscriberModals';
+import { Logo } from '../components/Logo';
 import { Avatar, Banner, Card, EmptyState, ErrorBanner, Issue, Spinner, StatTile, StatusBadge } from '../components/ui';
 
 const TOOLTIP_STYLE = {
@@ -26,9 +27,17 @@ export function DashboardPage() {
   if (query.error) return <ErrorBanner error={query.error} onRetry={() => query.refetch()} retrying={query.isFetching} />;
   const d = query.data!;
   const cur = d.currency;
-  const chartData = d.revenue_by_month.map((m) => ({ ...m, label: monthLabel(m.month) }));
+  // Start the chart at the first month with a payment (keeping at least 4 months), not 9 empty ones.
+  const firstPaid = d.revenue_by_month.findIndex((m) => m.amount > 0);
+  const startAt = firstPaid < 0 ? 0 : Math.max(0, Math.min(firstPaid, d.revenue_by_month.length - 4));
+  const chartData = d.revenue_by_month.slice(startAt).map((m) => ({ ...m, label: monthLabel(m.month) }));
   const overdue = d.attention.filter((s) => s.status === 'overdue' || s.status === 'expired');
   const dueSoon = d.attention.filter((s) => s.status === 'due_soon');
+  const nextUp = d.upcoming.find((u) => u.days_until_due >= 0);
+  // Sync failures not already explained by the Now playing card (Jellyfin down shows there).
+  const syncProblems = Object.entries(d.last_sync?.result ?? {})
+    .filter(([, r]) => !r.ok && !r.skipped && r.kind !== 'not_configured')
+    .filter(([name, r]) => !(name === 'jellyfin' && !d.now_playing.ok && r.kind === d.now_playing.kind));
   const axisLabel = (v: number) => money(v, cur).replace(/\.00$/, '');
   const maxAmount = Math.max(0, ...chartData.map((m) => m.amount));
   const axisWidth = Math.max(40, axisLabel(maxAmount).length * 7 + 10);
@@ -48,7 +57,7 @@ export function DashboardPage() {
 
       <div className="grid grid-kpi dash-kpis">
         <StatTile label="Paying subscribers" value={d.counts.paying} hint={`${d.counts.total} Jellyfin users`} />
-        <StatTile label="Monthly recurring revenue" value={money(d.mrr, cur)} hint={`${money(d.collected_this_month, cur)} collected this month`} />
+        <StatTile label="Monthly recurring revenue" value={money(d.mrr, cur)} hint={`${money(d.collected_this_month, cur)} collected so far in ${new Date().toLocaleString(undefined, { month: 'long' })}`} />
         <StatTile
           label="Overdue"
           value={(d.counts.overdue ?? 0) + (d.counts.expired ?? 0)}
@@ -62,7 +71,17 @@ export function DashboardPage() {
       <div className="grid grid-2">
         <Card className="dash-attention" title="Needs attention" subtitle="Overdue and upcoming payments" actions={<Link className="btn btn-sm" to="/reminders">Reminders</Link>}>
           {d.attention.length === 0 ? (
-            <EmptyState title="Nothing due">Everyone with a plan is paid up beyond the due-soon window.</EmptyState>
+            <div className="paid-up">
+              <Logo size={44} />
+              <div>
+                <div className="paid-up-title">Everyone's paid up.</div>
+                <div className="small text-muted">
+                  {nextUp
+                    ? `Next up: ${nextUp.name}, ${dateShort(nextUp.due_date)} (${daysLabel(nextUp.days_until_due)}).`
+                    : 'Nobody is due in the next 30 days.'}
+                </div>
+              </div>
+            </div>
           ) : (
             <div className="list">
               {[...overdue, ...dueSoon].map((s) => (
@@ -79,7 +98,7 @@ export function DashboardPage() {
                     </div>
                   </div>
                   <div className="attn-status">
-                    <span className={`small ${s.status === 'due_soon' ? 'text-warning' : 'text-critical'}`}>{daysLabel(s.days_until_due)}</span>
+                    <span className="small text-muted">{s.status === 'expired' ? '' : s.status === 'due_soon' ? `due ${daysLabel(s.days_until_due)}` : `due ${daysLabel(s.days_until_due)}`}</span>
                     <StatusBadge status={s.status} />
                   </div>
                   <div className="attn-action">
@@ -95,7 +114,7 @@ export function DashboardPage() {
           )}
         </Card>
 
-        <Card className="dash-revenue" title="Revenue" subtitle="Payments received per month, last 12 months">
+        <Card className="dash-revenue" title="Revenue" subtitle={startAt > 0 ? 'Payments received per month, since your first one' : 'Payments received per month, last 12 months'}>
           <div className="chart">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -188,16 +207,11 @@ export function DashboardPage() {
 
       <div className="dash-footer stack" style={{ gap: 8 }}>
         <div className="small text-muted">
-          {d.last_sync
-            ? `Last sync ${relative(d.last_sync.finished_at ?? d.last_sync.started_at)}${d.last_sync.ok ? '' : ', with problems:'}`
-            : 'Never synced yet.'}
+          {d.last_sync ? `Last sync ${relative(d.last_sync.finished_at ?? d.last_sync.started_at)}${syncProblems.length ? ', with problems:' : '.'}` : 'Never synced yet.'}
         </div>
-        {d.last_sync &&
-          Object.entries(d.last_sync.result)
-            .filter(([, r]) => !r.ok && r.kind !== 'not_configured')
-            // Jellyfin being down is already explained in Now playing; don't say it twice.
-            .filter(([name, r]) => !(name === 'jellyfin' && !d.now_playing.ok && r.kind === d.now_playing.kind))
-            .map(([name, r]) => <Issue key={name} compact message={r.error ?? `The ${name} sync failed.`} kind={r.kind} detail={r.detail} />)}
+        {syncProblems.map(([name, r]) => (
+          <Issue key={name} compact message={r.error ?? `The ${name} sync failed.`} kind={r.kind} detail={r.detail} />
+        ))}
       </div>
 
       {paying && <PaymentModal subscriber={paying} currency={cur} onClose={() => setPaying(null)} />}

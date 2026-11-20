@@ -3,6 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { relative } from '../lib/format';
+import type { Connections } from '../lib/types';
 import { useToast } from './ui';
 import { Logo, Wordmark } from './Logo';
 import { Avatar } from './ui';
@@ -53,13 +54,16 @@ const NAV = [
   { to: '/plans', label: 'Plans', icon: ICONS.plans },
   { to: '/payments', label: 'Payments', icon: ICONS.payments },
   { to: '/profitability', label: 'Profitability', icon: ICONS.profit },
-  { to: '/reminders', label: 'Reminders', icon: ICONS.reminders },
+  { to: '/reminders', label: 'Reminders & access', icon: ICONS.reminders },
   { to: '/settings', label: 'Settings', icon: ICONS.settings },
 ];
 
 /** Phone/tablet bottom bar: the four places Ed goes most, then "More" for the rest. */
 const TAB_PATHS = ['/', '/subscribers', '/payments', '/reminders'];
-const TABS = NAV.filter((n) => TAB_PATHS.includes(n.to)).map((n) => ({ ...n, short: n.to === '/' ? 'Home' : n.label }));
+const TABS = NAV.filter((n) => TAB_PATHS.includes(n.to)).map((n) => ({
+  ...n,
+  short: n.to === '/' ? 'Home' : n.to === '/reminders' ? 'Reminders' : n.label,
+}));
 const MORE = NAV.filter((n) => !TAB_PATHS.includes(n.to));
 
 const TITLES: Record<string, string> = {
@@ -68,14 +72,17 @@ const TITLES: Record<string, string> = {
   '/plans': 'Plans',
   '/payments': 'Payments',
   '/profitability': 'Profitability',
-  '/reminders': 'Reminders and access',
+  '/reminders': 'Reminders & access',
   '/settings': 'Settings',
 };
 
 interface SyncStatus {
   running: boolean;
   last_sync_at: string | null;
+  connections: Connections;
 }
+
+const SERVICE_NAMES: Record<string, string> = { jellyfin: 'Jellyfin', tracearr: 'Tracearr', seerr: 'Seerr' };
 
 export function SyncButton() {
   const qc = useQueryClient();
@@ -85,36 +92,62 @@ export function SyncButton() {
     queryFn: () => api.get<SyncStatus>('/api/sync/'),
     refetchInterval: (query) => (query.state.data?.running ? 2000 : 60_000),
   });
+  // The sync we started and are waiting on: identified by the last_sync_at it should replace.
+  const awaiting = React.useRef<{ since: string | null } | null>(null);
   const run = useMutation({
     mutationFn: () => api.post<{ started: boolean }>('/api/sync/'),
+    onMutate: () => {
+      awaiting.current = { since: status.data?.last_sync_at ?? null };
+    },
     onSuccess: (data) => {
-      toast(data.started ? 'Sync started' : 'A sync is already running', 'info');
+      if (!data.started) {
+        toast('A sync is already running.', 'info');
+        awaiting.current = null;
+      }
       qc.invalidateQueries({ queryKey: ['sync-status'] });
     },
-    onError: (err: Error) => toast(err.message, 'error'),
+    onError: (err: Error) => {
+      awaiting.current = null;
+      toast(err.message, 'error');
+    },
   });
 
-  // When a sync finishes, refresh everything that depends on it.
   const running = status.data?.running ?? false;
+  const failing = Object.entries(status.data?.connections ?? {}).filter(([, c]) => c.state === 'error');
   const wasRunning = React.useRef(false);
   React.useEffect(() => {
-    if (wasRunning.current && !running) {
+    const data = status.data;
+    if (!data) return;
+    // Finished = it was running and stopped (scheduler syncs too), or the one we started already has a new timestamp.
+    const ours = awaiting.current && !data.running && data.last_sync_at !== awaiting.current.since;
+    if ((wasRunning.current && !data.running) || ours) {
+      awaiting.current = null;
       qc.invalidateQueries();
-      toast('Sync finished', 'ok');
+      // Say what actually happened: a sync that couldn't reach a service did not "finish" fine.
+      const problems = Object.values(data.connections ?? {}).filter((c) => c.state === 'error');
+      if (problems.length) toast(`Sync finished with problems. ${problems.map((c) => c.message).join(' ')}`, 'error');
+      else toast('Sync finished. Everything is up to date.', 'ok');
     }
-    wasRunning.current = running;
-  }, [running, qc, toast]);
+    wasRunning.current = data.running;
+  }, [status.data, qc, toast]);
 
   return (
     <button
       className="btn btn-sm sync-btn"
       onClick={() => run.mutate()}
       disabled={running || run.isPending}
-      title={status.data?.last_sync_at ? `Last sync ${relative(status.data.last_sync_at)}` : 'Never synced'}
-      aria-label={running ? 'Syncing' : 'Sync now'}
+      title={
+        failing.length
+          ? `Last sync had problems: ${failing.map(([name]) => SERVICE_NAMES[name] ?? name).join(', ')}`
+          : status.data?.last_sync_at
+            ? `Last sync ${relative(status.data.last_sync_at)}`
+            : 'Never synced'
+      }
+      aria-label={running ? 'Syncing' : failing.length ? `Sync now (last sync had problems with ${failing.map(([name]) => SERVICE_NAMES[name] ?? name).join(', ')})` : 'Sync now'}
     >
       {running ? <div className="spinner" /> : ICONS.sync}
       <span className="btn-label">{running ? 'Syncing…' : 'Sync now'}</span>
+      {!running && failing.length > 0 && <span className="sync-warn" aria-hidden />}
     </button>
   );
 }
@@ -187,6 +220,14 @@ export function Layout({ username, onLogout, children }: { username: string | nu
   const { theme, toggle } = useTheme();
   const base = '/' + (location.pathname.split('/')[1] ?? '');
   const isDetail = location.pathname.startsWith('/subscribers/');
+  const detailId = isDetail ? Number(location.pathname.split('/')[2]) : null;
+  // Read the subscriber's name from the page's own query (no extra request) for the breadcrumb.
+  const detailName = useQuery({
+    queryKey: ['subscriber', detailId],
+    queryFn: () => api.get<{ name: string }>(`/api/subscribers/${detailId}/`),
+    enabled: false,
+    select: (d) => d.name,
+  }).data;
   const title = isDetail ? 'Subscriber' : (TITLES[base] ?? 'Tallyfin');
   const section = TITLES[base] ?? 'Tallyfin';
   const [moreOpen, setMoreOpen] = React.useState(false);
@@ -242,13 +283,13 @@ export function Layout({ username, onLogout, children }: { username: string | nu
             <Logo size={26} />
             <Wordmark className="topbar-word" />
           </NavLink>
-          <h1 className={isDetail ? '' : 'topbar-section'}>
+          <nav aria-label="Breadcrumb" className={`crumb ${isDetail ? '' : 'topbar-section'}`}>
             {isDetail ? (
               <>
                 <NavLink to="/subscribers" style={{ color: 'inherit', textDecoration: 'none' }}>
                   Subscribers
                 </NavLink>{' '}
-                / Subscriber
+                / {detailName ?? 'Subscriber'}
               </>
             ) : (
               <>
@@ -256,13 +297,13 @@ export function Layout({ username, onLogout, children }: { username: string | nu
                 {section}
               </>
             )}
-          </h1>
+          </nav>
           <div className="topbar-actions">
             <SyncButton />
           </div>
         </header>
         <main className="content">
-          {!isDetail && <h2 className="page-title">{title}</h2>}
+          {!isDetail && <h1 className="page-title">{title}</h1>}
           {children}
         </main>
       </div>

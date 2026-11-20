@@ -141,6 +141,7 @@ export interface EnforcementOverview {
   reenable_on_payment: boolean;
   disable_message: string;
   jellyfin_configured: boolean;
+  jellyfin_connection: ConnectionState;
   pending_disable: { subscriber_id: number; name: string; reason: string }[];
   pending_enable: { subscriber_id: number; name: string; reason: string }[];
   events: AccessEvent[];
@@ -152,6 +153,7 @@ export interface EnforcementResult {
   disabled: { subscriber_id: number; name: string; reason: string; sessions_stopped?: number; devices_removed?: number }[];
   enabled: { subscriber_id: number; name: string; reason: string }[];
   errors: string[];
+  failures?: { subscriber_id: number; name: string; action: 'disable' | 'enable'; message: string; kind: string }[];
 }
 
 /** A failure reported by the backend for one outside service (Jellyfin, Tracearr, Seerr). */
@@ -304,7 +306,19 @@ export interface Profitability {
   rows: ProfitabilityRow[];
 }
 
+/** What the last sync learned about one integration (see backend connection_states). */
+export interface ConnectionState {
+  state: 'ok' | 'error' | 'unknown' | 'not_configured';
+  message?: string;
+  kind?: string;
+  detail?: string;
+  checked_at?: string;
+}
+
+export type Connections = Record<'jellyfin' | 'tracearr' | 'seerr', ConnectionState>;
+
 export interface AppSettings {
+  connections?: Connections;
   jellyfin_url: string;
   jellyfin_api_key: string;
   tracearr_url: string;

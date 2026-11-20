@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ApiError } from '../lib/api';
-import type { SubscriptionStatus } from '../lib/types';
+import type { ConnectionState, SubscriptionStatus } from '../lib/types';
 
 // ---------------------------------------------------------------- toasts
 
@@ -49,6 +49,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       <div className="toasts">
         {toasts.map((t) => (
           <div key={t.id} className={`toast ${t.kind}`} role={t.kind === 'error' ? 'alert' : 'status'}>
+            {t.kind !== 'info' && <span className="toast-icon">{t.kind === 'ok' ? CHECK_ICON : ISSUE_ICONS.alert}</span>}
             <span className="toast-text">{t.text}</span>
             {t.action && (
               <button
@@ -217,8 +218,20 @@ export function ErrorBanner({ error, title, onRetry, retrying }: { error: unknow
 }
 
 export function Banner({ kind, children }: { kind: 'error' | 'warn' | 'info' | 'ok'; children: React.ReactNode }) {
-  return <div className={`banner banner-${kind}`}>{children}</div>;
+  const icon = kind === 'warn' || kind === 'error' ? ISSUE_ICONS.alert : kind === 'ok' ? CHECK_ICON : ISSUE_ICONS.info;
+  return (
+    <div className={`banner banner-${kind}`} role={kind === 'error' ? 'alert' : undefined}>
+      <span className="banner-icon">{icon}</span>
+      <div className="banner-text">{children}</div>
+    </div>
+  );
 }
+
+const CHECK_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M20 6 9 17l-5-5" />
+  </svg>
+);
 
 export function EmptyState({ title, children }: { title: string; children?: React.ReactNode }) {
   return (
@@ -409,6 +422,7 @@ export function ConfirmDialog({
   confirmLabel,
   tone = 'danger',
   pending,
+  error,
   onConfirm,
   onClose,
 }: {
@@ -417,19 +431,22 @@ export function ConfirmDialog({
   confirmLabel: string;
   tone?: 'danger' | 'default';
   pending?: boolean;
+  /** A failed attempt stays in the dialog, so it's clear nothing happened and retrying is one click. */
+  error?: unknown;
   onConfirm: () => void;
   onClose: () => void;
 }) {
   return (
     <Modal title={title} onClose={pending ? () => {} : onClose}>
       <div className="confirm-body">{children}</div>
+      {error ? <ErrorBanner error={error} title="Nothing was changed" /> : null}
       <div className="form-actions">
         <button type="button" className="btn" onClick={onClose} disabled={pending} data-autofocus>
           Cancel
         </button>
         <button type="button" className={`btn ${tone === 'danger' ? 'btn-destructive' : 'btn-primary'}`} onClick={onConfirm} disabled={pending}>
           {pending && <div className="spinner" />}
-          {confirmLabel}
+          {error ? 'Try again' : confirmLabel}
         </button>
       </div>
     </Modal>
@@ -509,4 +526,63 @@ export function useElementWidth<T extends HTMLElement>(): [(el: T | null) => voi
     return () => ro.disconnect();
   }, [el]);
   return [setEl, width];
+}
+
+/** Connected / Not reachable / Not checked yet / Not set up, from the last sync, not from "has a URL". */
+export function ConnectionBadge({ connection }: { connection?: ConnectionState }) {
+  const state = connection?.state ?? 'unknown';
+  if (state === 'ok')
+    return (
+      <span className="badge badge-active" title={connection?.checked_at ? `Answered the sync ${relativeShort(connection.checked_at)}` : undefined}>
+        <span className="dot" aria-hidden />
+        Connected
+      </span>
+    );
+  if (state === 'error')
+    return (
+      <span className="badge badge-overdue">
+        <span className="dot" aria-hidden />
+        {connection?.kind === 'auth' ? 'Key rejected' : 'Not reachable'}
+      </span>
+    );
+  if (state === 'not_configured') return <span className="badge badge-neutral">Not set up</span>;
+  return <span className="badge badge-neutral">Not checked yet</span>;
+}
+
+function relativeShort(iso: string): string {
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const h = Math.round(mins / 60);
+  return h < 24 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
+}
+
+/**
+ * A sortable column header: a real button (reachable by keyboard) with aria-sort on the cell,
+ * instead of a clickable <th>.
+ */
+export function SortHeader<T>({
+  label,
+  column,
+  sort,
+  defaultDir = 'asc',
+  className,
+}: {
+  label: React.ReactNode;
+  column: keyof T;
+  sort: { key: keyof T; dir: 'asc' | 'desc'; toggle: (k: keyof T, d?: 'asc' | 'desc') => void };
+  defaultDir?: 'asc' | 'desc';
+  className?: string;
+}) {
+  const active = sort.key === column;
+  return (
+    <th className={`sortable ${className ?? ''}`} aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <button type="button" className="th-sort" onClick={() => sort.toggle(column, defaultDir)}>
+        {label}
+        <span aria-hidden className="sort-mark">
+          {active ? (sort.dir === 'asc' ? '↑' : '↓') : ''}
+        </span>
+      </button>
+    </th>
+  );
 }

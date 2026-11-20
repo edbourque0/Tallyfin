@@ -271,6 +271,9 @@ class Payment(models.Model):
     period_end = models.DateField(null=True, blank=True)
     method = models.CharField(max_length=50, blank=True, default="")
     note = models.TextField(blank=True, default="")
+    # What recording this payment did to the subscriber's due date, so deleting it can undo exactly that.
+    moved_due_date = models.BooleanField(default=False)
+    replaced_due_date = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

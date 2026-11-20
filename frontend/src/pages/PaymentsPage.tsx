@@ -2,9 +2,10 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { dateShort, money } from '../lib/format';
+import { dateShort, money, plural } from '../lib/format';
 import type { AppSettings, Payment } from '../lib/types';
-import { Card, EmptyState, ErrorBanner, Spinner, StatTile } from '../components/ui';
+import { Card, EmptyState, ErrorBanner, Spinner, StatTile, useElementWidth } from '../components/ui';
+import { PaymentList } from '../components/PaymentList';
 import { useDeletePayment, usePendingPaymentDeletes } from '../lib/undo';
 
 export function PaymentsPage() {
@@ -14,6 +15,8 @@ export function PaymentsPage() {
   const currency = settings.data?.currency ?? 'USD';
 
   const deletePayment = useDeletePayment();
+  const [wrapRef, width] = useElementWidth<HTMLDivElement>();
+  const asList = width > 0 && width < 760;
   const pendingDeletes = usePendingPaymentDeletes();
 
   const list = useMemo(() => (payments.data ?? []).filter((p) => !pendingDeletes.has(p.id)), [payments.data, pendingDeletes]);
@@ -42,19 +45,34 @@ export function PaymentsPage() {
   if (payments.error) return <ErrorBanner error={payments.error} onRetry={() => payments.refetch()} retrying={payments.isFetching} />;
 
   return (
-    <div className="stack">
+    <div className="stack" ref={wrapRef}>
       <div className="grid grid-kpi">
         <StatTile label="Collected this month" value={money(stats.month, currency)} />
         <StatTile label="Collected this year" value={money(stats.thisYear, currency)} />
-        <StatTile label="All time" value={money(stats.total, currency)} hint={`${list.length} payments`} />
+        <StatTile label="All time" value={money(stats.total, currency)} hint={plural(list.length, 'payment')} />
       </div>
       <div className="row-between">
-        <p className="text-muted">Every payment recorded, newest first. Record new payments from a subscriber's page.</p>
-        <input className="search" placeholder="Search by user or note…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <p className="text-muted">Every payment, newest first. To record one, use “Payment” on the dashboard or on a subscriber.</p>
+        <input
+          className="search"
+          type="search"
+          aria-label="Search payments by subscriber or note"
+          placeholder="Search by name or note…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
       </div>
       {filtered.length === 0 ? (
         <Card>
-          <EmptyState title="No payments" />
+          {search ? (
+            <EmptyState title="No payments match">Try another name, or clear the search.</EmptyState>
+          ) : (
+            <EmptyState title="No payments yet">They show up here as you record them.</EmptyState>
+          )}
+        </Card>
+      ) : asList ? (
+        <Card>
+          <PaymentList payments={filtered} onDelete={deletePayment} showName />
         </Card>
       ) : (
         <div className="table-wrap">

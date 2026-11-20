@@ -26,18 +26,24 @@ from ..models import AccessEvent, AppSettings, Subscriber
 from .notifications import configured_channels, send_notification
 from .status import EXPIRED, GOOD_STANDING, OVERDUE, SubscriptionStatus, compute_status
 
+
+
+def human_date(d) -> str:
+    """Nov 7, 2026: the format the web UI uses, instead of ISO."""
+    return f"{d:%b} {d.day}, {d.year}" if d else ""
+
 logger = logging.getLogger(__name__)
 
 
 def disable_reason(st: SubscriptionStatus, settings: AppSettings) -> str | None:
     """Why this subscriber should lose access right now, or None."""
     if st.status == EXPIRED:
-        return f"exemption ended on {st.due_date}"
+        return f"exemption ended {human_date(st.due_date)}"
     if st.status == OVERDUE and st.days_until_due is not None:
         overdue_days = -st.days_until_due
         beyond_grace = overdue_days - int(settings.grace_days or 0)
         if beyond_grace >= max(int(settings.auto_disable_after_days or 0), 1):
-            return f"{overdue_days} day{'s' if overdue_days != 1 else ''} overdue (payment was due {st.due_date})"
+            return f"{overdue_days} day{'s' if overdue_days != 1 else ''} overdue (was due {human_date(st.due_date)})"
     return None
 
 
@@ -120,7 +126,7 @@ def run_enforcement(dry_run: bool = False, force: bool = False, only_ids: set[in
     if only_ids is not None:
         to_disable = [(s, r) for s, r in to_disable if s.pk in only_ids]
         to_enable = [(s, r) for s, r in to_enable if s.pk in only_ids]
-    result: dict[str, Any] = {"dry_run": dry_run, "disabled": [], "enabled": [], "errors": []}
+    result: dict[str, Any] = {"dry_run": dry_run, "disabled": [], "enabled": [], "errors": [], "failures": []}
     if dry_run:
         result["disabled"] = [_describe(s, r) for s, r in to_disable]
         result["enabled"] = [_describe(s, r) for s, r in to_enable]
@@ -137,14 +143,16 @@ def run_enforcement(dry_run: bool = False, force: bool = False, only_ids: set[in
             )
         except IntegrationError as exc:
             logger.warning("Could not disable %s: %s", sub.name, exc)
-            result["errors"].append(f"Couldn't disable {sub.name}. {exc.message}")
+            result["errors"].append(f"Couldn't disable {sub.name}: {exc.message}")
+            result["failures"].append({"subscriber_id": sub.pk, "name": sub.name, "action": "disable", "message": exc.message, "kind": exc.kind})
     for sub, reason in to_enable:
         try:
             enable_access(client, sub, reason)
             result["enabled"].append(_describe(sub, reason))
         except IntegrationError as exc:
             logger.warning("Could not re-enable %s: %s", sub.name, exc)
-            result["errors"].append(f"Couldn't re-enable {sub.name}. {exc.message}")
+            result["errors"].append(f"Couldn't re-enable {sub.name}: {exc.message}")
+            result["failures"].append({"subscriber_id": sub.pk, "name": sub.name, "action": "enable", "message": exc.message, "kind": exc.kind})
 
     if (result["disabled"] or result["enabled"]) and settings.notify_on_access_change and configured_channels(settings):
         lines = []

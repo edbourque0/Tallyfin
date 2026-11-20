@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { dateShort, daysLabel, hours, money, relative } from '../lib/format';
 import type { AppSettings, Plan, Subscriber } from '../lib/types';
-import { Avatar, Card, EmptyState, ErrorBanner, Spinner, StatusBadge, useElementWidth, useSort } from '../components/ui';
+import { Avatar, Card, EmptyState, ErrorBanner, Spinner, StatusBadge, useElementWidth, useSort, SortHeader } from '../components/ui';
 import { PaymentModal, SubscriptionModal } from '../components/SubscriberModals';
 
 /** Below this content width the table becomes a list of people; below COMPACT_BELOW it drops the usage columns. */
@@ -27,6 +27,7 @@ const EDIT_ICON = (
 );
 
 type Filter = 'all' | 'paying' | 'due_soon' | 'overdue' | 'unassigned' | 'exempt';
+const FILTER_KEYS: Filter[] = ['all', 'paying', 'due_soon', 'overdue', 'unassigned', 'exempt'];
 
 interface Row {
   sub: Subscriber;
@@ -43,21 +44,40 @@ interface Row {
 }
 
 export function SubscribersPage() {
-  const [filter, setFilter] = useState<Filter>('all');
-  const [search, setSearch] = useState('');
-  const [planFilter, setPlanFilter] = useState('');
-  const [showRemoved, setShowRemoved] = useState(false);
+  // Filters live in the URL: they survive going to a subscriber and back, reloads, and can be bookmarked.
+  const [params, setParams] = useSearchParams();
+  const filter = (FILTER_KEYS.includes(params.get('show') as Filter) ? params.get('show') : 'all') as Filter;
+  const search = params.get('q') ?? '';
+  const planFilter = params.get('plan') ?? '';
+  const showRemoved = params.get('removed') === '1';
+  const setParam = (key: string, value: string) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value) next.set(key, value);
+        else next.delete(key);
+        return next;
+      },
+      { replace: true },
+    );
+  const setFilter = (f: Filter) => setParam('show', f === 'all' ? '' : f);
+  const setSearch = (q: string) => setParam('q', q);
+  const setPlanFilter = (p: string) => setParam('plan', p);
+  const setShowRemoved = (v: boolean) => setParam('removed', v ? '1' : '');
   const [editing, setEditing] = useState<Subscriber | null>(null);
   const [paying, setPaying] = useState<Subscriber | null>(null);
   const [wrapRef, width] = useElementWidth<HTMLDivElement>();
   const asList = width > 0 && width < LIST_BELOW;
-  const compact = width > 0 && width < COMPACT_BELOW;
   const tight = width > 0 && width < TIGHT_BELOW;
 
   const subs = useQuery({
     queryKey: ['subscribers', showRemoved],
     queryFn: () => api.get<Subscriber[]>(`/api/subscribers/${showRemoved ? '?include_removed=1' : ''}`),
   });
+  // Usage columns only earn their space when there is usage to show.
+  const anyWatch = (subs.data ?? []).some((x) => x.usage?.tracearr_user_id);
+  const anyRequests = (subs.data ?? []).some((x) => x.usage?.seerr_user_id != null);
+  const compact = (width > 0 && width < COMPACT_BELOW) || (!anyWatch && !anyRequests);
   const plans = useQuery({ queryKey: ['plans'], queryFn: () => api.get<Plan[]>('/api/plans/') });
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<AppSettings>('/api/settings/') });
   const currency = settings.data?.currency ?? 'USD';
@@ -100,7 +120,29 @@ export function SubscribersPage() {
     });
   }, [rows, search, planFilter, filter]);
 
-  const { sorted, toggle, setSort, key: sortKey, indicator } = useSort<Row>(filtered, 'name');
+  const { sorted, toggle: toggleSort, setSort, key: sortKey, dir: sortDir } = useSort<Row>(filtered, (params.get('sort') as keyof Row) || 'name', params.get('dir') === 'desc' ? 'desc' : 'asc');
+  useEffect(() => {
+    const wantSort = sortKey === 'name' && sortDir === 'asc' ? null : String(sortKey);
+    const wantDir = wantSort ? sortDir : null;
+    if (params.get('sort') === wantSort && params.get('dir') === wantDir) return; // already in the URL: no navigation
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (wantSort && wantDir) {
+          next.set('sort', wantSort);
+          next.set('dir', wantDir);
+        } else {
+          next.delete('sort');
+          next.delete('dir');
+        }
+        return next;
+      },
+      { replace: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to sort changes
+  }, [sortKey, sortDir]);
+  const toggle = toggleSort;
+  const subSort = { key: sortKey, dir: sortDir, toggle };
 
   const counts = useMemo(() => {
     const c: Record<Filter, number> = { all: rows.length, paying: 0, due_soon: 0, overdue: 0, unassigned: 0, exempt: 0 };
@@ -181,9 +223,9 @@ export function SubscribersPage() {
               ))}
             </select>
           )}
-          <label className="check small text-muted">
-            <input type="checkbox" checked={showRemoved} onChange={(e) => setShowRemoved(e.target.checked)} /> Removed users
-          </label>
+          <button type="button" className={`chip ${showRemoved ? 'active' : ''}`} aria-pressed={showRemoved} onClick={() => setShowRemoved(!showRemoved)}>
+            Include removed users
+          </button>
         </div>
       </div>
 
@@ -222,11 +264,9 @@ export function SubscribersPage() {
                   </div>
                 </Link>
                 <div className="person-actions">
-                  {s.plan && (
-                    <button className="btn btn-sm" onClick={() => setPaying(s)}>
-                      Payment
-                    </button>
-                  )}
+                  <button className="btn btn-sm" onClick={() => setPaying(s)} aria-label={`Record a payment for ${s.name}`}>
+                    Payment
+                  </button>
                   <button className="icon-btn" onClick={() => setEditing(s)} aria-label={`Edit ${s.name}`} title="Edit">
                     {EDIT_ICON}
                   </button>
@@ -240,15 +280,15 @@ export function SubscribersPage() {
           <table>
             <thead>
               <tr>
-                <th className="sortable" onClick={() => toggle('name')}>User{indicator('name')}</th>
-                <th className="sortable" onClick={() => toggle('plan')}>Plan{indicator('plan')}</th>
-                <th className="sortable" onClick={() => toggle('status')}>Status{indicator('status')}</th>
-                <th className="sortable" onClick={() => toggle('due')}>Next payment{indicator('due')}</th>
-                <th className="sortable col-usage" onClick={() => toggle('lastWatched', 'desc')}>Last watched{indicator('lastWatched')}</th>
-                <th className="num sortable col-usage" onClick={() => toggle('hours30', 'desc')}>30d watched{indicator('hours30')}</th>
-                <th className="num sortable col-usage" onClick={() => toggle('plays30', 'desc')}>Plays{indicator('plays30')}</th>
-                <th className="num sortable col-usage" onClick={() => toggle('requests30', 'desc')}>Requests{indicator('requests30')}</th>
-                <th className="num sortable col-revenue" onClick={() => toggle('revenue', 'desc')}>/ month{indicator('revenue')}</th>
+                <SortHeader<Row> label="User" column="name" sort={subSort} />
+                <SortHeader<Row> label="Plan" column="plan" sort={subSort} />
+                <SortHeader<Row> label="Status" column="status" sort={subSort} />
+                <SortHeader<Row> label="Next payment" column="due" sort={subSort} />
+                <SortHeader<Row> label="Last watched" column="lastWatched" sort={subSort} defaultDir="desc" className="col-usage" />
+                <SortHeader<Row> label="30d watched" column="hours30" sort={subSort} defaultDir="desc" className="num col-usage" />
+                <SortHeader<Row> label="Plays" column="plays30" sort={subSort} defaultDir="desc" className="num col-usage" />
+                <SortHeader<Row> label="Requests" column="requests30" sort={subSort} defaultDir="desc" className="num col-usage" />
+                <SortHeader<Row> label="/ month" column="revenue" sort={subSort} defaultDir="desc" className="num col-revenue" />
                 <th />
               </tr>
             </thead>
@@ -299,10 +339,10 @@ export function SubscribersPage() {
                     <td className="num col-revenue">{s.is_paying ? money(r.revenue, s.plan?.currency ?? currency) : <span className="text-muted">—</span>}</td>
                     <td>
                       <div className="actions">
-                        <button className="btn btn-sm" onClick={() => setPaying(s)} disabled={!s.plan}>
+                        <button className="btn btn-sm" onClick={() => setPaying(s)} aria-label={`Record a payment for ${s.name}`}>
                           Payment
                         </button>
-                        <button className="btn btn-sm" onClick={() => setEditing(s)}>
+                        <button className="btn btn-sm" onClick={() => setEditing(s)} aria-label={`Edit ${s.name}'s subscription`}>
                           Edit
                         </button>
                       </div>

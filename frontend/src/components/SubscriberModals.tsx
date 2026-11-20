@@ -1,9 +1,9 @@
-import { FormEvent, useState } from 'react';
+import React, { FormEvent, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { dateShort, money, today } from '../lib/format';
+import { dateShort, daysBetween, money, today } from '../lib/format';
 import type { Payment, Plan, StatusOverride, Subscriber } from '../lib/types';
-import { ErrorBanner, Field, Modal, useToast } from './ui';
+import { Banner, ErrorBanner, Field, Modal, useToast } from './ui';
 
 export function invalidateSubscriberData(qc: ReturnType<typeof useQueryClient>, id?: number) {
   return Promise.all([
@@ -143,7 +143,7 @@ export function PaymentModal({ subscriber, currency, onClose }: { subscriber: Su
   const [amount, setAmount] = useState(plan ? String(plan.price) : '');
   const [paidAt, setPaidAt] = useState(todayStr);
   const [periodStart, setPeriodStart] = useState(defaultStart);
-  const [method, setMethod] = useState('');
+  const [method, setMethod] = useState(() => rememberedMethod(subscriber.id));
   const [note, setNote] = useState('');
   const [advance, setAdvance] = useState(true);
 
@@ -159,12 +159,32 @@ export function PaymentModal({ subscriber, currency, onClose }: { subscriber: Su
         advance_due_date: advance,
       }),
     onSuccess: (data) => {
+      rememberMethod(subscriber.id, method);
       invalidateSubscriberData(qc, subscriber.id);
       toast(`Payment recorded. Next due ${dateShort(data.subscriber.next_payment_date)}.${data.access_restored ? ' Jellyfin access restored.' : ''}`, 'ok');
       if (data.access_error) toast(`Payment recorded, but their Jellyfin access is still off. ${data.access_error}`, 'error');
       onClose();
     },
   });
+
+  // Late payers: the period starts on the payment date (overdue days aren't charged). Say so, and offer the other choice.
+  const due = subscriber.next_payment_date;
+  const gap = plan && due && periodStart > due ? daysBetween(due, periodStart) : 0;
+  const periodHelp: React.ReactNode =
+    gap > 0 ? (
+      <>
+        {subscriber.name} was due {dateShort(due)}. Starting from {dateShort(periodStart)} means the {gap} day{gap === 1 ? '' : 's'} in between aren't charged.{' '}
+        <button type="button" className="link-btn" onClick={() => setPeriodStart(due!)}>
+          Start from {dateShort(due)} instead
+        </button>
+      </>
+    ) : due && periodStart === due && due >= todayStr ? (
+      'Paying early: the new period starts when the current one ends.'
+    ) : due && periodStart === due ? (
+      `Starts on the missed due date, so there's no gap in what they pay for.`
+    ) : (
+      `Covers one period (${plan?.duration_label ?? ''}) from this date.`
+    );
 
   return (
     <Modal title={`Record payment — ${subscriber.name}`} onClose={onClose}>
@@ -176,7 +196,7 @@ export function PaymentModal({ subscriber, currency, onClose }: { subscriber: Su
         }}
       >
         <ErrorBanner error={save.error} />
-        {!plan && <div className="banner banner-warn">This subscriber has no plan. The payment is recorded but the due date cannot be advanced.</div>}
+        {!plan && <Banner kind="info">{subscriber.name} has no plan, so this payment is recorded but no due date moves. Assign a plan in “Edit subscription” to track renewals.</Banner>}
         <div className="field-row">
           <Field label={`Amount (${plan?.currency ?? currency})`}>
             <input type="number" step="0.01" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} required={!plan} />
@@ -186,23 +206,25 @@ export function PaymentModal({ subscriber, currency, onClose }: { subscriber: Su
           </Field>
         </div>
         {plan && (
-          <Field
-            label="Period starts"
-            help={subscriber.next_payment_date && subscriber.next_payment_date >= todayStr ? 'Paying early: the new period starts when the current one ends.' : 'Covers one plan period from this date.'}
-          >
+          <Field label="Period starts" help={periodHelp}>
             <input type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
           </Field>
         )}
         <div className="field-row">
           <Field label="Method">
-            <input value={method} onChange={(e) => setMethod(e.target.value)} placeholder="e-transfer, cash, PayPal…" list="payment-methods" />
+            <input value={method} onChange={(e) => setMethod(e.target.value)} placeholder="How they paid" list="payment-methods" />
             <datalist id="payment-methods">
-              <option value="e-transfer" />
-              <option value="cash" />
-              <option value="PayPal" />
-              <option value="bank transfer" />
-              <option value="crypto" />
+              {METHODS.map((m) => (
+                <option key={m} value={m} />
+              ))}
             </datalist>
+            <div className="chips" role="group" aria-label="Common methods">
+              {METHODS.slice(0, 4).map((m) => (
+                <button type="button" key={m} className={`chip ${method === m ? 'active' : ''}`} aria-pressed={method === m} onClick={() => setMethod(method === m ? '' : m)}>
+                  {m}
+                </button>
+              ))}
+            </div>
           </Field>
           <Field label="Note">
             <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="optional" />
@@ -225,4 +247,27 @@ export function PaymentModal({ subscriber, currency, onClose }: { subscriber: Su
       </form>
     </Modal>
   );
+}
+
+const METHODS = ['e-Transfer', 'Cash', 'PayPal', 'Bank transfer', 'Crypto'];
+const METHOD_KEY = 'tallyfin-payment-method';
+
+/** Most people pay the same way every time: start from what this subscriber used last. */
+function rememberedMethod(subscriberId: number): string {
+  try {
+    const all = JSON.parse(localStorage.getItem(METHOD_KEY) ?? '{}') as Record<string, string>;
+    return all[String(subscriberId)] ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function rememberMethod(subscriberId: number, method: string) {
+  try {
+    const all = JSON.parse(localStorage.getItem(METHOD_KEY) ?? '{}') as Record<string, string>;
+    if (method) all[String(subscriberId)] = method;
+    localStorage.setItem(METHOD_KEY, JSON.stringify(all));
+  } catch {
+    /* storage unavailable: nothing to remember */
+  }
 }

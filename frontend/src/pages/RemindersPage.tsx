@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../lib/api';
-import { dateShort, dateTime, daysLabel, money } from '../lib/format';
+import { api, ApiError } from '../lib/api';
+import { channelList, dateShort, dateTime, daysLabel, money, plural, reminderKind } from '../lib/format';
 import type { EnforcementOverview, EnforcementResult, RemindersOverview } from '../lib/types';
-import { Banner, Card, ConfirmDialog, EmptyState, ErrorBanner, Modal, Spinner, StatusBadge, useToast } from '../components/ui';
+import { Banner, Card, ConfirmDialog, EmptyState, ErrorBanner, Issue, Modal, Spinner, StatusBadge, useToast } from '../components/ui';
 
 interface RunResult {
   sent: number;
@@ -23,27 +23,37 @@ export function RemindersPage() {
   const query = useQuery({ queryKey: ['reminders'], queryFn: () => api.get<RemindersOverview>('/api/reminders/') });
   const enforcement = useQuery({ queryKey: ['enforcement'], queryFn: () => api.get<EnforcementOverview>('/api/enforcement/') });
   const [confirmApply, setConfirmApply] = useState(false);
+  const syncNow = useMutation({
+    mutationFn: () => api.post<{ started: boolean }>('/api/sync/'),
+    onSuccess: (d) => {
+      toast(d.started ? 'Sync started. This card updates when it finishes.' : 'A sync is already running.', 'info');
+      window.setTimeout(() => {
+        qc.invalidateQueries({ queryKey: ['enforcement'] });
+        qc.invalidateQueries({ queryKey: ['sync-status'] });
+      }, 8000);
+    },
+    onError: (err: Error) => toast(err.message, 'error'),
+  });
   const applyEnforcement = useMutation({
     // Only the people shown in the confirmation are acted on, even if the list changed since.
-    mutationFn: (ids: number[]) => api.post<EnforcementResult>('/api/enforcement/', { dry_run: false, subscriber_ids: ids }),
+    mutationFn: async (ids: number[]) => {
+      const result = await api.post<EnforcementResult>('/api/enforcement/', { dry_run: false, subscriber_ids: ids });
+      // Nothing applied at all (e.g. Jellyfin down): treat as a failure so the dialog stays open with Retry.
+      if (result.skipped) throw new ApiError(200, result.skipped, result, 'not_configured');
+      if (result.errors.length && !result.disabled.length && !result.enabled.length)
+        throw new ApiError(200, failureSummary(result), result, result.failures?.[0]?.kind ?? 'error');
+      return result;
+    },
     onSuccess: (result) => {
       setConfirmApply(false);
       qc.invalidateQueries({ queryKey: ['enforcement'] });
       qc.invalidateQueries({ queryKey: ['subscribers'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
-      if (result.skipped) {
-        toast(result.skipped, 'error');
-        return;
-      }
       const parts: string[] = [];
-      if (result.disabled.length) parts.push(`Disabled ${nameList(result.disabled.map((r) => r.name))}.`);
-      if (result.enabled.length) parts.push(`Restored ${nameList(result.enabled.map((r) => r.name))}.`);
-      parts.push(...result.errors);
+      if (result.disabled.length) parts.push(`Turned off access for ${nameList(result.disabled.map((r) => r.name))}.`);
+      if (result.enabled.length) parts.push(`Turned access back on for ${nameList(result.enabled.map((r) => r.name))}.`);
+      if (result.errors.length) parts.push(failureSummary(result));
       toast(parts.join(' ') || 'Nothing changed.', result.errors.length ? 'error' : 'ok');
-    },
-    onError: (err: Error) => {
-      setConfirmApply(false);
-      toast(err.message, 'error');
     },
   });
 
@@ -78,9 +88,9 @@ export function RemindersPage() {
     toDisable.length && toEnable.length
       ? `Apply ${toDisable.length + toEnable.length} changes`
       : toDisable.length
-        ? `Disable ${toDisable.length} account${toDisable.length === 1 ? '' : 's'}`
+        ? `Turn off ${toDisable.length} account${toDisable.length === 1 ? '' : 's'}`
         : toEnable.length
-          ? `Restore ${toEnable.length} account${toEnable.length === 1 ? '' : 's'}`
+          ? `Turn ${toEnable.length} account${toEnable.length === 1 ? '' : 's'} back on`
           : 'Nothing to apply';
 
   return (
@@ -94,13 +104,20 @@ export function RemindersPage() {
 
       {confirmApply && enforcement.data && (
         <ConfirmDialog
-          title={toDisable.length ? `${applyLabel}?` : `Restore access for ${nameList(toEnable.map((p) => p.name))}?`}
+          title={toDisable.length ? `${applyLabel}?` : `Turn access back on for ${nameList(toEnable.map((p) => p.name))}?`}
           confirmLabel={applyLabel}
           tone={toDisable.length ? 'danger' : 'default'}
           pending={applyEnforcement.isPending}
+          error={applyEnforcement.error}
           onConfirm={() => applyEnforcement.mutate([...toDisable, ...toEnable].map((p) => p.subscriber_id))}
-          onClose={() => setConfirmApply(false)}
+          onClose={() => {
+            setConfirmApply(false);
+            applyEnforcement.reset();
+          }}
         >
+          {enforcement.data.jellyfin_connection?.state === 'error' && !applyEnforcement.isError && (
+            <Issue compact message={`Heads up: the last sync couldn't reach Jellyfin, so this will probably fail. ${enforcement.data.jellyfin_connection.message ?? ''}`} kind="timeout" />
+          )}
           {toDisable.length > 0 && (
             <div className="stack" style={{ gap: 8 }}>
               <p>
@@ -140,7 +157,7 @@ export function RemindersPage() {
           )}
           {toDisable.length > 0 && (
             <p className="small text-muted">
-              You can turn anyone back on from their page{enforcement.data.reenable_on_payment ? ', and recording a payment restores access automatically' : ''}.
+              You can turn anyone back on from their page{enforcement.data.reenable_on_payment ? ', and recording a payment turns access back on automatically' : ''}.
             </p>
           )}
         </ConfirmDialog>
@@ -171,6 +188,22 @@ export function RemindersPage() {
           </div>
         }
       >
+        {enforcement.data?.jellyfin_connection?.state === 'error' && (
+          <div style={{ marginBottom: 16 }}>
+            <Issue
+              message={
+                toDisable.length || toEnable.length
+                  ? `Automatic enforcement is stuck: the last sync couldn't reach Jellyfin, so nobody below has been changed yet. ${enforcement.data.jellyfin_connection.message ?? ''}`
+                  : `The last sync couldn't reach Jellyfin, so automatic enforcement can't act until it can. ${enforcement.data.jellyfin_connection.message ?? ''}`
+              }
+              kind={enforcement.data.jellyfin_connection.kind}
+              detail={enforcement.data.jellyfin_connection.detail}
+              onRetry={() => syncNow.mutate()}
+              retrying={syncNow.isPending}
+              retryLabel="Sync now"
+            />
+          </div>
+        )}
         {enforcement.isLoading ? (
           <Spinner />
         ) : enforcement.error ? (
@@ -178,7 +211,7 @@ export function RemindersPage() {
         ) : (
           <div className="grid grid-3">
             <div>
-              <div className="section-title">Will be disabled</div>
+              <div className="section-title">Will be turned off</div>
               {enforcement.data!.pending_disable.length === 0 ? (
                 <div className="small text-muted">Nobody</div>
               ) : (
@@ -197,7 +230,7 @@ export function RemindersPage() {
               )}
             </div>
             <div>
-              <div className="section-title">Will be restored</div>
+              <div className="section-title">Will be turned back on</div>
               {enforcement.data!.pending_enable.length === 0 ? (
                 <div className="small text-muted">Nobody</div>
               ) : (
@@ -218,7 +251,7 @@ export function RemindersPage() {
             <div>
               <div className="section-title">Recent changes</div>
               {enforcement.data!.events.length === 0 ? (
-                <div className="small text-muted">No accounts disabled or restored yet</div>
+                <div className="small text-muted">No access changes yet</div>
               ) : (
                 <div className="list">
                   {enforcement.data!.events.slice(0, 8).map((e) => (
@@ -226,7 +259,7 @@ export function RemindersPage() {
                       <div>
                         <div className="primary">
                           <Link to={`/subscribers/${e.subscriber}`}>{e.subscriber_name}</Link>{' '}
-                          <span className={e.action === 'disabled' ? 'text-critical' : 'text-good'}>{e.action}</span>
+                          <span className="text-muted">{e.action === 'disabled' ? 'turned off' : 'turned back on'}</span>
                         </div>
                         <div className="secondary">{e.reason}</div>
                       </div>
@@ -246,21 +279,29 @@ export function RemindersPage() {
             <dt>Daily digest at</dt>
             <dd>{d.reminder_time} (server time)</dd>
             <dt>Before due date</dt>
-            <dd>{d.days_before.length ? d.days_before.map((n) => `${n} day${n === 1 ? '' : 's'}`).join(', ') : 'none'}</dd>
+            <dd>{d.days_before.length ? d.days_before.map((n) => plural(n, 'day')).join(', ') : 'No advance reminders'}</dd>
             <dt>On the due date</dt>
-            <dd>always</dd>
+            <dd>Always</dd>
             <dt>When overdue</dt>
-            <dd>first day, then every {d.overdue_every_days} days</dd>
-            <dt>Channels</dt>
-            <dd>{d.channels.length ? d.channels.join(', ') : <span className="text-critical">none</span>}</dd>
-            <dt>Last run</dt>
-            <dd>{d.last_run_date ? dateShort(d.last_run_date) : 'never'}</dd>
+            <dd>{d.overdue_every_days ? `The first day, then every ${plural(d.overdue_every_days, 'day')}` : 'The first day only'}</dd>
+            <dt>Sent to</dt>
+            <dd>
+              {d.channels.length ? (
+                channelList(d.channels)
+              ) : (
+                <>
+                  Nowhere yet. <Link to="/settings">Add a channel</Link>
+                </>
+              )}
+            </dd>
+            <dt>Last digest</dt>
+            <dd>{d.last_run_date ? dateShort(d.last_run_date) : 'Not sent yet'}</dd>
           </dl>
         </Card>
 
         <Card
           title="Pending today"
-          subtitle="What the next digest will contain"
+          subtitle={d.channels.length ? 'What the next digest will contain' : 'Add a notification channel in Settings to send these'}
           actions={
             <div className="row">
               <button className="btn btn-sm" onClick={() => run.mutate(true)} disabled={run.isPending || d.pending.length === 0}>
@@ -273,7 +314,7 @@ export function RemindersPage() {
           }
         >
           {d.pending.length === 0 ? (
-            <EmptyState title="Nothing pending">Every reminder due today has already been sent, or nobody is due.</EmptyState>
+            <EmptyState title="Nothing to send today">Today's reminders have gone out, or nobody is due.</EmptyState>
           ) : (
             <div className="list">
               {d.pending.map((item) => (
@@ -283,7 +324,7 @@ export function RemindersPage() {
                       <Link to={`/subscribers/${item.subscriber_id}`}>{item.name}</Link>
                     </div>
                     <div className="secondary">
-                      {item.plan} · {money(item.amount, item.currency ?? undefined)} · {item.kind.replace(/_/g, ' ')}
+                      {item.plan} · {money(item.amount, item.currency ?? undefined)} · {reminderKind(item.kind).replace(/^Reminder: /, '')}
                     </div>
                   </div>
                   <StatusBadge status={item.status} />
@@ -353,9 +394,9 @@ export function RemindersPage() {
                     <td>
                       <Link to={`/subscribers/${entry.subscriber}`}>{entry.subscriber_name}</Link>
                     </td>
-                    <td>{entry.kind.replace(/_/g, ' ')}</td>
+                    <td>{reminderKind(entry.kind)}</td>
                     <td>{dateShort(entry.due_date)}</td>
-                    <td className="small text-muted">{entry.channels}</td>
+                    <td className="small text-muted">{channelList(entry.channels)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -378,4 +419,21 @@ export function RemindersPage() {
 function nameList(names: string[]): string {
   if (names.length <= 1) return names.join('');
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/** Group failures by cause: "Couldn't turn off Jonathan or Olivier R. Can't reach Jellyfin at jf.local." */
+function failureSummary(result: EnforcementResult): string {
+  const failures = result.failures ?? [];
+  if (!failures.length) return result.errors.join(' ');
+  const byCause = new Map<string, typeof failures>();
+  for (const f of failures) byCause.set(`${f.action}|${f.message}`, [...(byCause.get(`${f.action}|${f.message}`) ?? []), f]);
+  return Array.from(byCause.values())
+    .map((group) => {
+      const names = group.map((f) => f.name);
+      const who = names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`;
+      const verb = group[0].action === 'disable' ? 'turn off' : 'turn back on';
+      const sep = /[.!?]$/.test(who) ? ' ' : '. ';
+      return `Couldn't ${verb} ${who}${sep}${group[0].message}`;
+    })
+    .join(' ');
 }

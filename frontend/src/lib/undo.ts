@@ -54,7 +54,12 @@ export function useDeletePayment() {
         const result = await api.del<{ due_date_reverted: boolean; next_payment_date: string | null }>(path);
         await invalidateSubscriberData(qc, payment.subscriber);
         if (result?.due_date_reverted) {
-          push(`${payment.subscriber_name}'s next payment is due ${dateShort(result.next_payment_date)} again.`, 'info');
+          push(
+            result.next_payment_date
+              ? `${payment.subscriber_name}'s due date is back to ${dateShort(result.next_payment_date)}, as before that payment.`
+              : `${payment.subscriber_name} has no due date again, as before that payment.`,
+            'info',
+          );
         }
       } catch (err) {
         push(`Couldn't delete the payment. ${err instanceof Error ? err.message : ''}`.trim(), 'error');

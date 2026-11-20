@@ -47,9 +47,12 @@ def compute_profitability(settings: AppSettings) -> dict[str, Any]:
     for sub in subscribers:
         st = compute_status(sub, settings)
         usage = getattr(sub, "usage", None)
-        hours_30d = (usage.watch_ms_30d if usage else 0) / MS_PER_HOUR
-        plays_30d = usage.plays_30d if usage else 0
-        transcodes = usage.transcode_plays_30d if usage else 0
+        # Only usage matched to a Tracearr user counts; stale figures from an old match would
+        # show watch time next to a "Tracearr isn't connected" notice.
+        tracked = bool(usage and usage.tracearr_user_id)
+        hours_30d = (usage.watch_ms_30d if tracked else 0) / MS_PER_HOUR
+        plays_30d = usage.plays_30d if tracked else 0
+        transcodes = usage.transcode_plays_30d if tracked else 0
         total_hours += hours_30d
         rows.append(
             {

@@ -71,3 +71,34 @@ export function percent(value: number | null | undefined, digits = 0): string {
   if (value === null || value === undefined) return '—';
   return `${value.toFixed(digits)}%`;
 }
+
+/** Reminder log kinds ("due_in_7", "due_today", "overdue_3") as words. */
+export function reminderKind(kind: string): string {
+  const due = /^due_in_(\d+)$/.exec(kind);
+  if (due) return `Reminder: due in ${due[1]} day${due[1] === '1' ? '' : 's'}`;
+  if (kind === 'due_today') return 'Reminder: due today';
+  const late = /^overdue_(\d+)$/.exec(kind);
+  if (late) return `Reminder: ${late[1]} day${late[1] === '1' ? '' : 's'} overdue`;
+  if (kind === 'overdue') return 'Overdue reminder';
+  const t = kind.replace(/_/g, ' ');
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+const CHANNEL_NAMES: Record<string, string> = {
+  discord: 'Discord',
+  ntfy: 'ntfy',
+  gotify: 'Gotify',
+  telegram: 'Telegram',
+  webhook: 'Webhook',
+  email: 'Email',
+};
+
+/** "discord,ntfy" -> "Discord, ntfy". Empty means it was only shown in Tallyfin. */
+export function channelList(raw: string | string[] | null | undefined): string {
+  const parts = (Array.isArray(raw) ? raw : (raw ?? '').split(',')).map((c) => c.trim()).filter(Boolean);
+  return parts.length ? parts.map((c) => CHANNEL_NAMES[c] ?? c).join(', ') : 'In Tallyfin only';
+}
+
+export function plural(n: number, word: string, many = `${word}s`): string {
+  return `${n} ${n === 1 ? word : many}`;
+}

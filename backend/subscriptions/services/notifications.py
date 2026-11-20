@@ -8,11 +8,22 @@ from typing import Any
 import requests
 from django.core.mail import EmailMessage, get_connection
 
+from ..integrations.http import describe_failure
 from ..models import AppSettings
 
 logger = logging.getLogger(__name__)
 TIMEOUT = 15
 ACCENT_COLOR = 0xA855F7
+
+
+CHANNEL_LABELS = {
+    "discord": "Discord",
+    "ntfy": "ntfy",
+    "gotify": "Gotify",
+    "telegram": "Telegram",
+    "webhook": "The webhook",
+    "email": "Email",
+}
 
 
 def configured_channels(s: AppSettings) -> list[str]:
@@ -128,6 +139,8 @@ def send_notification(
             SENDERS[channel](s, title, message, items or [])
             results[channel] = "ok"
         except Exception as exc:  # noqa: BLE001 - report every failure to the UI
-            logger.warning("Notification via %s failed: %s", channel, exc)
-            results[channel] = str(exc)[:300]
+            # str(exc) from requests includes the full URL, and Discord/Telegram/Gotify URLs carry the secret.
+            _kind, clause = describe_failure(exc, TIMEOUT)
+            logger.warning("Notification via %s failed: %s (%s)", channel, clause, exc.__class__.__name__)
+            results[channel] = f"{CHANNEL_LABELS.get(channel, channel)} {clause}"
     return results

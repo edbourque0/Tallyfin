@@ -208,7 +208,19 @@ class PlanViewSet(viewsets.ModelViewSet):
     serializer_class = PlanSerializer
 
     def get_queryset(self):
-        return Plan.objects.annotate(subscriber_count=Count("subscribers")).order_by("sort_order", "price", "name")
+        return Plan.objects.annotate(
+            subscriber_count=Count("subscribers", distinct=True), payment_count=Count("payments", distinct=True)
+        ).order_by("sort_order", "price", "name")
+
+    def destroy(self, request, *args, **kwargs):
+        plan = self.get_object()
+        if plan.subscriber_count:
+            n = plan.subscriber_count
+            return Response(
+                {"detail": f"{n} subscriber{'s are' if n != 1 else ' is'} still on {plan.name}. Archive it instead, so they keep their plan."},
+                status=http_status.HTTP_409_CONFLICT,
+            )
+        return super().destroy(request, *args, **kwargs)
 
 
 # ----------------------------------------------------------------------------- subscribers
@@ -299,7 +311,7 @@ class RecordPaymentView(APIView):
         try:
             access_restored = enforcement.restore_after_payment(sub, settings) is not None
         except IntegrationError as exc:
-            access_error = str(exc)
+            access_error = exc.message
         return Response(
             {
                 "payment": PaymentSerializer(payment).data,
@@ -318,19 +330,22 @@ class SubscriberActivityView(APIView):
         sub = get_object_or_404(_subscriber_queryset(include_removed=True), pk=pk)
         settings = AppSettings.load()
         usage = getattr(sub, "usage", None)
-        result = {"tracearr": {"ok": False, "history": [], "error": None}, "seerr": {"ok": False, "requests": [], "error": None}}
+        result = {
+            "tracearr": {"ok": False, "history": [], "error": None, "kind": None, "detail": ""},
+            "seerr": {"ok": False, "requests": [], "error": None, "kind": None, "detail": ""},
+        }
 
         if settings.tracearr_configured and usage and usage.tracearr_user_id:
             try:
                 client = TracearrClient(settings.tracearr_url, settings.tracearr_api_key)
                 history = client.get_user_history(usage.tracearr_user_id, page_size=20)
-                result["tracearr"] = {"ok": True, "error": None, "history": [_compact_play(h) for h in history]}
+                result["tracearr"] = {"ok": True, "error": None, "kind": None, "detail": "", "history": [_compact_play(h) for h in history]}
             except IntegrationError as exc:
-                result["tracearr"]["error"] = str(exc)
+                result["tracearr"].update(error=exc.message, kind=exc.kind, detail=exc.detail)
         elif not settings.tracearr_configured:
-            result["tracearr"]["error"] = "Tracearr is not configured"
+            result["tracearr"].update(error="Tracearr isn't set up yet.", kind="not_configured")
         else:
-            result["tracearr"]["error"] = "No matching Tracearr user"
+            result["tracearr"].update(error="No matching Tracearr user.", kind="no_match")
 
         if settings.seerr_configured and usage and usage.seerr_user_id:
             try:
@@ -341,13 +356,13 @@ class SubscriberActivityView(APIView):
                     described = client.describe_request(item)
                     described["title"] = client.get_media_title(described["type"] or "movie", described["tmdb_id"])
                     requests_out.append(described)
-                result["seerr"] = {"ok": True, "error": None, "requests": requests_out}
+                result["seerr"] = {"ok": True, "error": None, "kind": None, "detail": "", "requests": requests_out}
             except IntegrationError as exc:
-                result["seerr"]["error"] = str(exc)
+                result["seerr"].update(error=exc.message, kind=exc.kind, detail=exc.detail)
         elif not settings.seerr_configured:
-            result["seerr"]["error"] = "Seerr is not configured"
+            result["seerr"].update(error="Seerr isn't set up yet.", kind="not_configured")
         else:
-            result["seerr"]["error"] = "No matching Seerr user"
+            result["seerr"].update(error="No matching Seerr user.", kind="no_match")
         return Response(result)
 
 
@@ -427,9 +442,17 @@ class PaymentListView(APIView):
 
 class PaymentDetailView(APIView):
     def delete(self, request, pk: int):
-        payment = get_object_or_404(Payment, pk=pk)
+        """Delete a payment. If it is the payment that set the current due date, the due date moves back
+        to where it was before (the start of that payment's period)."""
+        payment = get_object_or_404(Payment.objects.select_related("subscriber"), pk=pk)
+        sub = payment.subscriber
+        reverted = False
+        if payment.period_start and payment.period_end and sub.next_payment_date == payment.period_end:
+            sub.next_payment_date = payment.period_start
+            sub.save(update_fields=["next_payment_date", "updated_at"])
+            reverted = True
         payment.delete()
-        return Response(status=http_status.HTTP_204_NO_CONTENT)
+        return Response({"due_date_reverted": reverted, "next_payment_date": sub.next_payment_date})
 
     def patch(self, request, pk: int):
         payment = get_object_or_404(Payment, pk=pk)
@@ -477,15 +500,16 @@ class DashboardView(APIView):
                 months[key] += float(payment.amount)
         revenue_by_month = [{"month": key, "amount": round(value, 2)} for key, value in months.items()]
 
-        now_playing = {"ok": False, "streams": [], "error": None}
+        now_playing = {"ok": False, "streams": [], "error": None, "kind": None, "detail": ""}
         if settings.jellyfin_configured:
             try:
-                streams = JellyfinClient(settings.jellyfin_url, settings.jellyfin_api_key).get_now_playing()
-                now_playing = {"ok": True, "streams": streams, "error": None}
+                # Short timeout: the dashboard shouldn't hang for 20 s because the media server is down.
+                streams = JellyfinClient(settings.jellyfin_url, settings.jellyfin_api_key, timeout=6).get_now_playing()
+                now_playing = {"ok": True, "streams": streams, "error": None, "kind": None, "detail": ""}
             except IntegrationError as exc:
-                now_playing["error"] = str(exc)
+                now_playing.update(error=exc.message, kind=exc.kind, detail=exc.detail)
         else:
-            now_playing["error"] = "Jellyfin is not configured"
+            now_playing.update(error="Jellyfin isn't set up yet.", kind="not_configured")
 
         last_run = SyncRun.objects.order_by("-started_at").first()
         return Response(
@@ -552,6 +576,7 @@ class EnforcementView(APIView):
                 "after_days": settings.auto_disable_after_days,
                 "grace_days": settings.grace_days,
                 "reenable_on_payment": settings.auto_reenable_on_payment,
+                "disable_message": settings.disable_message,
                 "jellyfin_configured": settings.jellyfin_configured,
                 "pending_disable": [{"subscriber_id": s.pk, "name": s.name, "reason": r} for s, r in pending_disable],
                 "pending_enable": [{"subscriber_id": s.pk, "name": s.name, "reason": r} for s, r in pending_enable],
@@ -561,7 +586,13 @@ class EnforcementView(APIView):
 
     def post(self, request):
         dry_run = bool(request.data.get("dry_run"))
-        return Response(enforcement.run_enforcement(dry_run=dry_run, force=True))
+        raw_ids = request.data.get("subscriber_ids")
+        only_ids = None
+        if raw_ids is not None:
+            if not isinstance(raw_ids, list):
+                return Response({"detail": "subscriber_ids must be a list."}, status=400)
+            only_ids = {int(i) for i in raw_ids if str(i).isdigit()}
+        return Response(enforcement.run_enforcement(dry_run=dry_run, force=True, only_ids=only_ids))
 
 
 class RemindersView(APIView):

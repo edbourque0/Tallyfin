@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .http import BaseClient, IntegrationError, normalize_id
+from .http import DEFAULT_TIMEOUT, BaseClient, IntegrationError, normalize_id
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +15,10 @@ CLIENT_NAME = "Tallyfin"
 class JellyfinClient(BaseClient):
     service = "Jellyfin"
 
-    def __init__(self, base_url: str, api_key: str):
-        super().__init__(base_url)
+    def __init__(self, base_url: str, api_key: str, timeout: int = DEFAULT_TIMEOUT):
+        super().__init__(base_url, timeout=timeout)
         if not api_key:
-            raise IntegrationError(self.service, "API key is not configured")
+            raise IntegrationError(self.service, f"{self.service} isn't set up yet: add its API key in Settings.", kind="not_configured")
         self.api_key = api_key
         self.session.headers.update(
             {

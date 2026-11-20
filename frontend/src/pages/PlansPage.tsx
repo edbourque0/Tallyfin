@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { money } from '../lib/format';
 import type { AppSettings, DurationUnit, Plan } from '../lib/types';
-import { Card, EmptyState, ErrorBanner, Field, Modal, Spinner, useToast } from '../components/ui';
+import { Card, ConfirmDialog, EmptyState, ErrorBanner, Field, Modal, Spinner, useToast } from '../components/ui';
 
 interface PlanForm {
   name: string;
@@ -36,18 +36,41 @@ export function PlansPage() {
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<AppSettings>('/api/settings/') });
   const [modal, setModal] = useState<{ plan: Plan | null } | null>(null);
 
+  const [confirmDelete, setConfirmDelete] = useState<Plan | null>(null);
   const remove = useMutation({
-    mutationFn: (id: number) => api.del(`/api/plans/${id}/`),
-    onSuccess: () => {
+    mutationFn: (plan: Plan) => api.del(`/api/plans/${plan.id}/`),
+    onSuccess: (_data, plan) => {
+      setConfirmDelete(null);
       qc.invalidateQueries({ queryKey: ['plans'] });
       qc.invalidateQueries({ queryKey: ['subscribers'] });
-      toast('Plan deleted', 'ok');
+      toast(`Deleted ${plan.name}.`, 'ok');
+    },
+    onError: (err: Error) => {
+      setConfirmDelete(null);
+      toast(err.message, 'error');
+    },
+  });
+  // Archiving is the safe "remove": people already on the plan keep it, it just can't be picked for anyone new.
+  const setActive = useMutation({
+    mutationFn: ({ plan, active }: { plan: Plan; active: boolean }) => api.patch<Plan>(`/api/plans/${plan.id}/`, { is_active: active }),
+    onSuccess: (_data, { plan, active }) => {
+      qc.invalidateQueries({ queryKey: ['plans'] });
+      qc.invalidateQueries({ queryKey: ['subscribers'] });
+      if (active) toast(`${plan.name} is available again.`, 'ok');
+      else
+        toast(
+          plan.subscriber_count
+            ? `Archived ${plan.name}. ${plan.subscriber_count} subscriber${plan.subscriber_count === 1 ? ' keeps' : 's keep'} it; it can't be picked for anyone new.`
+            : `Archived ${plan.name}.`,
+          'ok',
+          { action: { label: 'Undo', onClick: () => setActive.mutate({ plan, active: true }) } },
+        );
     },
     onError: (err: Error) => toast(err.message, 'error'),
   });
 
   if (plans.isLoading) return <Spinner label="Loading plans…" />;
-  if (plans.error) return <ErrorBanner error={plans.error} />;
+  if (plans.error) return <ErrorBanner error={plans.error} onRetry={() => plans.refetch()} retrying={plans.isFetching} />;
   const list = plans.data ?? [];
 
   return (
@@ -93,15 +116,20 @@ export function PlansPage() {
                       <button className="btn btn-sm" onClick={() => setModal({ plan: p })}>
                         Edit
                       </button>
-                      <button
-                        className="btn btn-sm btn-danger"
-                        onClick={() => {
-                          const warning = p.subscriber_count > 0 ? ` ${p.subscriber_count} subscriber(s) will lose their plan.` : '';
-                          if (window.confirm(`Delete plan “${p.name}”?${warning}`)) remove.mutate(p.id);
-                        }}
-                      >
-                        Delete
-                      </button>
+                      {p.is_active ? (
+                        <button className="btn btn-sm" onClick={() => setActive.mutate({ plan: p, active: false })} disabled={setActive.isPending}>
+                          Archive
+                        </button>
+                      ) : (
+                        <button className="btn btn-sm" onClick={() => setActive.mutate({ plan: p, active: true })} disabled={setActive.isPending}>
+                          Restore
+                        </button>
+                      )}
+                      {!p.is_active && p.subscriber_count === 0 && (
+                        <button className="btn btn-sm btn-ghost btn-danger" onClick={() => setConfirmDelete(p)}>
+                          Delete…
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -109,6 +137,23 @@ export function PlansPage() {
             </tbody>
           </table>
         </div>
+      )}
+      {confirmDelete && (
+        <ConfirmDialog
+          title={`Delete ${confirmDelete.name}?`}
+          confirmLabel="Delete plan"
+          pending={remove.isPending}
+          onConfirm={() => remove.mutate(confirmDelete)}
+          onClose={() => setConfirmDelete(null)}
+        >
+          <p>Nobody is on this plan, so no one's billing changes. This can't be undone.</p>
+          {confirmDelete.payment_count > 0 && (
+            <p className="small text-muted">
+              {confirmDelete.payment_count} past payment{confirmDelete.payment_count === 1 ? '' : 's'} stay in the ledger, but will no longer show which plan they
+              were for. Keeping it archived preserves that.
+            </p>
+          )}
+        </ConfirmDialog>
       )}
       {modal && <PlanModal plan={modal.plan} currency={settings.data?.currency ?? 'USD'} onClose={() => setModal(null)} />}
     </div>

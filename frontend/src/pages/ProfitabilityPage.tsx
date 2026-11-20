@@ -20,7 +20,7 @@ export function ProfitabilityPage() {
   const { sorted, toggle, indicator } = useSort<ProfitabilityRow>(rows, 'rank');
 
   if (query.isLoading) return <Spinner label="Crunching numbers…" />;
-  if (query.error) return <ErrorBanner error={query.error} />;
+  if (query.error) return <ErrorBanner error={query.error} onRetry={() => query.refetch()} retrying={query.isFetching} />;
   const data = query.data!;
   const cur = data.currency;
   const hasCost = data.monthly_server_cost > 0;

@@ -16,5 +16,5 @@ def exception_handler(exc, context):
         return response
     if isinstance(exc, IntegrationError):
         logger.warning("Integration error in %s: %s", context.get("view"), exc)
-        return Response({"detail": str(exc), "service": exc.service}, status=502)
+        return Response({"detail": exc.message, "service": exc.service, "kind": exc.kind, "technical": exc.detail}, status=502)
     return None

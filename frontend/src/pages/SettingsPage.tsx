@@ -47,14 +47,16 @@ export function SettingsPage() {
   const testNotify = useMutation({
     mutationFn: () => api.post<{ ok: boolean; results: Record<string, string> }>('/api/settings/test-notification/'),
     onSuccess: (data) => {
-      const lines = Object.entries(data.results).map(([c, r]) => `${c}: ${r}`);
-      toast(lines.join(' · '), data.ok ? 'ok' : 'error');
+      const sent = Object.entries(data.results).filter(([, r]) => r === 'ok').map(([c]) => c);
+      const failed = Object.values(data.results).filter((r) => r !== 'ok');
+      if (failed.length === 0) toast(`Test notification sent to ${sent.join(', ')}.`, 'ok');
+      else toast(`${failed.join('. ')}.${sent.length ? ` Sent to ${sent.join(', ')}.` : ''}`, 'error');
     },
     onError: (err: Error) => toast(err.message, 'error'),
   });
 
   if (query.isLoading || !form) return <Spinner label="Loading settings…" />;
-  if (query.error) return <ErrorBanner error={query.error} />;
+  if (query.error) return <ErrorBanner error={query.error} onRetry={() => query.refetch()} retrying={query.isFetching} />;
 
   const set = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
   const text = (key: keyof AppSettings, props: InputHTMLAttributes<HTMLInputElement> = {}) => (

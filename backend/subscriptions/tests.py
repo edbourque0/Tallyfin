@@ -518,8 +518,19 @@ class EnforcementTests(AuthenticatedTestCase):
             result = run_enforcement()
         self.assertNotIn("active", {e["name"] for e in result["enabled"]})
 
+    @mock.patch("subscriptions.services.enforcement.JellyfinClient")
+    def test_manual_run_only_touches_confirmed_subscribers(self, client_cls):
+        client_cls.return_value.logout_user_everywhere.return_value = {"sessions_stopped": 0, "devices_removed": 0}
+        # The admin confirmed only "late"; "trial" became due meanwhile and must be left alone.
+        res = self.client.post("/api/enforcement/", {"dry_run": False, "subscriber_ids": [self.late.pk]}, format="json")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual([d["name"] for d in res.json()["disabled"]], ["late"])
+        self.assertEqual(res.json()["enabled"], [])
+        client_cls.return_value.set_user_disabled.assert_called_once_with("id-late", True)
+
     def test_enforcement_endpoint(self):
         data = self.client.get("/api/enforcement/").json()
+        self.assertEqual(data["disable_message"], self.settings_row.disable_message)
         self.assertTrue(data["enabled"])
         self.assertEqual({d["name"] for d in data["pending_disable"]}, {"late", "trial"})
         self.assertEqual({d["name"] for d in data["pending_enable"]}, {"paidback"})
@@ -591,3 +602,124 @@ class ProxyCsrfTests(TestCase):
         res = self._put_settings(client, token)
         self.assertEqual(res.status_code, 403, res.content)
         self.assertIn("Origin checking failed", res.json()["detail"])
+
+
+class ErrorPresentationTests(AuthenticatedTestCase):
+    """Failures reach the UI as plain sentences with a kind, and never echo secrets."""
+
+    def test_unreachable_server_is_classified_without_raw_exception_text(self):
+        import requests
+
+        from subscriptions.integrations.http import IntegrationError
+        from subscriptions.integrations.jellyfin import JellyfinClient
+
+        client = JellyfinClient("http://media.lan:8096", "secret-key")
+        err = requests.ConnectionError("HTTPConnectionPool(host='media.lan'): NameResolutionError")
+        with mock.patch.object(client.session, "request", side_effect=err):
+            with self.assertRaises(IntegrationError) as ctx:
+                client.get("/Sessions", params={"ActiveWithinSeconds": 300})
+        exc = ctx.exception
+        self.assertEqual(exc.kind, "unreachable")
+        self.assertEqual(exc.message, "Can't reach Jellyfin at media.lan:8096.")
+        self.assertNotIn("HTTPConnectionPool", exc.message)
+        self.assertNotIn("ActiveWithinSeconds", exc.detail)  # query strings stay out of details
+        self.assertIn("doesn't resolve", exc.detail)
+
+    def test_rejected_api_key_is_auth_kind(self):
+        from subscriptions.integrations.http import IntegrationError
+        from subscriptions.integrations.tracearr import TracearrClient
+
+        client = TracearrClient("http://tracearr.lan", "bad")
+        response = mock.Mock(status_code=401, headers={}, text="nope")
+        with mock.patch.object(client.session, "request", return_value=response):
+            with self.assertRaises(IntegrationError) as ctx:
+                client.get("/servers")
+        self.assertEqual(ctx.exception.kind, "auth")
+        self.assertEqual(ctx.exception.message, "Tracearr rejected the API key.")
+
+    def test_dashboard_reports_now_playing_problem_with_kind(self):
+        import requests
+
+        s = AppSettings.load()
+        s.jellyfin_url, s.jellyfin_api_key = "http://media.lan", "k"
+        s.save()
+        with mock.patch("requests.Session.request", side_effect=requests.ConnectTimeout("timed out")):
+            data = self.client.get("/api/dashboard/").json()
+        np = data["now_playing"]
+        self.assertFalse(np["ok"])
+        self.assertEqual(np["kind"], "timeout")
+        self.assertEqual(np["error"], "Jellyfin at media.lan didn't respond within 6 seconds.")
+
+    def test_notification_failure_never_echoes_the_webhook_secret(self):
+        import requests
+
+        from subscriptions.services.notifications import send_notification
+
+        s = AppSettings.load()
+        s.discord_webhook_url = "https://discord.com/api/webhooks/123/SUPER-SECRET-TOKEN"
+        s.save()
+        response = requests.Response()
+        response.status_code = 404
+        response.url = s.discord_webhook_url
+        with mock.patch("requests.post", return_value=response):
+            results = send_notification(s, "Test", "Hello")
+        self.assertNotIn("SUPER-SECRET-TOKEN", results["discord"])
+        self.assertTrue(results["discord"].startswith("Discord answered 404"))
+
+    def test_api_integration_error_has_kind_and_technical(self):
+        s = AppSettings.load()
+        s.jellyfin_url, s.jellyfin_api_key = "http://media.lan", "k"
+        s.save()
+        response = mock.Mock(status_code=403, headers={}, text="")
+        with mock.patch("requests.Session.request", return_value=response):
+            res = self.client.post("/api/settings/test/jellyfin/", {}, format="json")
+        self.assertEqual(res.status_code, 502)
+        body = res.json()
+        self.assertEqual(body["kind"], "auth")
+        self.assertEqual(body["detail"], "Jellyfin rejected the API key.")
+        self.assertIn("HTTP 403", body["technical"])
+
+
+class SafeRemovalTests(AuthenticatedTestCase):
+    def test_plan_in_use_cannot_be_deleted_but_can_be_archived(self):
+        plan = make_plan()
+        make_sub("alice", plan=plan, next_payment_date=timezone.localdate())
+        res = self.client.delete(f"/api/plans/{plan.pk}/")
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("Archive it instead", res.json()["detail"])
+        self.assertTrue(Plan.objects.filter(pk=plan.pk).exists())
+
+        res = self.client.patch(f"/api/plans/{plan.pk}/", {"is_active": False}, format="json")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(Subscriber.objects.get(name="alice").plan_id, plan.pk)  # still on it
+
+    def test_unused_plan_can_be_deleted(self):
+        plan = make_plan()
+        self.assertEqual(self.client.delete(f"/api/plans/{plan.pk}/").status_code, 204)
+
+    def test_deleting_latest_payment_moves_due_date_back(self):
+        plan = make_plan()
+        today = timezone.localdate()
+        sub = make_sub("bob", plan=plan, next_payment_date=today)
+        payment = self.client.post(f"/api/subscribers/{sub.pk}/payments/", {}, format="json").json()["payment"]
+        sub.refresh_from_db()
+        self.assertNotEqual(sub.next_payment_date, today)
+
+        res = self.client.delete(f"/api/payments/{payment['id']}/")
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.json()["due_date_reverted"])
+        sub.refresh_from_db()
+        self.assertEqual(sub.next_payment_date, today)
+
+    def test_deleting_older_payment_leaves_due_date(self):
+        plan = make_plan()
+        today = timezone.localdate()
+        sub = make_sub("carol", plan=plan, next_payment_date=today)
+        first = self.client.post(f"/api/subscribers/{sub.pk}/payments/", {}, format="json").json()["payment"]
+        self.client.post(f"/api/subscribers/{sub.pk}/payments/", {}, format="json")
+        sub.refresh_from_db()
+        due = sub.next_payment_date
+        res = self.client.delete(f"/api/payments/{first['id']}/")
+        self.assertFalse(res.json()["due_date_reverted"])
+        sub.refresh_from_db()
+        self.assertEqual(sub.next_payment_date, due)

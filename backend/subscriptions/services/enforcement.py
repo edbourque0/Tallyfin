@@ -104,7 +104,12 @@ def _describe(sub: Subscriber, reason: str) -> dict[str, Any]:
     return {"subscriber_id": sub.pk, "name": sub.name, "reason": reason}
 
 
-def run_enforcement(dry_run: bool = False, force: bool = False) -> dict[str, Any]:
+def run_enforcement(dry_run: bool = False, force: bool = False, only_ids: set[int] | None = None) -> dict[str, Any]:
+    """Apply pending disables/re-enables.
+
+    ``only_ids`` limits a manual run to the subscribers the admin saw and confirmed, so a list that
+    changed between preview and confirmation never disables someone extra.
+    """
     settings = AppSettings.load()
     if not settings.auto_disable_enabled and not force:
         return {"skipped": "automatic access enforcement is disabled", "disabled": [], "enabled": [], "errors": []}
@@ -112,6 +117,9 @@ def run_enforcement(dry_run: bool = False, force: bool = False) -> dict[str, Any
         return {"skipped": "Jellyfin is not configured", "disabled": [], "enabled": [], "errors": []}
 
     to_disable, to_enable = plan_actions(settings)
+    if only_ids is not None:
+        to_disable = [(s, r) for s, r in to_disable if s.pk in only_ids]
+        to_enable = [(s, r) for s, r in to_enable if s.pk in only_ids]
     result: dict[str, Any] = {"dry_run": dry_run, "disabled": [], "enabled": [], "errors": []}
     if dry_run:
         result["disabled"] = [_describe(s, r) for s, r in to_disable]
@@ -128,13 +136,15 @@ def run_enforcement(dry_run: bool = False, force: bool = False) -> dict[str, Any
                 {**_describe(sub, reason), "sessions_stopped": event.sessions_stopped, "devices_removed": event.devices_removed}
             )
         except IntegrationError as exc:
-            result["errors"].append(f"{sub.name}: {exc}")
+            logger.warning("Could not disable %s: %s", sub.name, exc)
+            result["errors"].append(f"Couldn't disable {sub.name}. {exc.message}")
     for sub, reason in to_enable:
         try:
             enable_access(client, sub, reason)
             result["enabled"].append(_describe(sub, reason))
         except IntegrationError as exc:
-            result["errors"].append(f"{sub.name}: {exc}")
+            logger.warning("Could not re-enable %s: %s", sub.name, exc)
+            result["errors"].append(f"Couldn't re-enable {sub.name}. {exc.message}")
 
     if (result["disabled"] or result["enabled"]) and settings.notify_on_access_change and configured_channels(settings):
         lines = []

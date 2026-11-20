@@ -70,10 +70,15 @@ def _guard(name: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         return {"ok": True, **data}
     except IntegrationError as exc:
         logger.warning("%s sync failed: %s", name, exc)
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": exc.message, "kind": exc.kind, "detail": exc.detail}
     except Exception as exc:  # noqa: BLE001
         logger.exception("%s sync crashed", name)
-        return {"ok": False, "error": f"{name}: {exc}"}
+        return {
+            "ok": False,
+            "error": f"The {name} sync stopped on an unexpected error. The server log has the full trace.",
+            "kind": "crash",
+            "detail": f"{exc.__class__.__name__}: {exc}"[:300],
+        }
 
 
 def run_sync(triggered_by: str = "manual") -> SyncRun:
@@ -84,7 +89,7 @@ def run_sync(triggered_by: str = "manual") -> SyncRun:
     if settings.jellyfin_configured:
         result["jellyfin"] = _guard("Jellyfin", lambda: sync_jellyfin(settings))
     else:
-        result["jellyfin"] = {"ok": False, "error": "Jellyfin is not configured"}
+        result["jellyfin"] = {"ok": False, "error": "Jellyfin isn't set up yet.", "kind": "not_configured"}
 
     if settings.tracearr_configured:
         result["tracearr"] = _guard("Tracearr", lambda: sync_tracearr(settings))

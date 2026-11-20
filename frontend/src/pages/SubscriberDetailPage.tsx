@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
+import { useDeletePayment, usePendingPaymentDeletes } from '../lib/undo';
 import { dateShort, dateTime, daysLabel, hours, money, relative } from '../lib/format';
 import type { Activity, AppSettings, Plan, Subscriber, SubscriberDetail } from '../lib/types';
-import { Avatar, Card, EmptyState, ErrorBanner, Spinner, StatusBadge, useToast } from '../components/ui';
+import { Avatar, Card, EmptyState, ErrorBanner, Spinner, StatusBadge, useToast, Issue, ConfirmDialog } from '../components/ui';
 import { invalidateSubscriberData, PaymentModal, SubscriptionModal } from '../components/SubscriberModals';
 
 export function SubscriberDetailPage() {
@@ -28,25 +29,24 @@ export function SubscriberDetailPage() {
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<AppSettings>('/api/settings/') });
   const currency = settings.data?.currency ?? 'USD';
 
+  const [confirmDisable, setConfirmDisable] = useState(false);
   const access = useMutation({
     mutationFn: (disabled: boolean) => api.post<Subscriber>(`/api/subscribers/${subscriberId}/jellyfin-access/`, { disabled }),
     onSuccess: (data) => {
       invalidateSubscriberData(qc, subscriberId);
-      toast(data.is_disabled ? 'Jellyfin account disabled' : 'Jellyfin account enabled', 'ok');
+      setConfirmDisable(false);
+      toast(data.is_disabled ? `${data.name} can no longer sign in to Jellyfin.` : `${data.name} can sign in to Jellyfin again.`, 'ok');
     },
-    onError: (err: Error) => toast(err.message, 'error'),
-  });
-  const deletePayment = useMutation({
-    mutationFn: (paymentId: number) => api.del(`/api/payments/${paymentId}/`),
-    onSuccess: () => {
-      invalidateSubscriberData(qc, subscriberId);
-      toast('Payment deleted', 'ok');
+    onError: (err: Error) => {
+      setConfirmDisable(false);
+      toast(err.message, 'error');
     },
-    onError: (err: Error) => toast(err.message, 'error'),
   });
+  const deletePayment = useDeletePayment();
+  const pendingDeletes = usePendingPaymentDeletes();
 
   if (detail.isLoading) return <Spinner label="Loading…" />;
-  if (detail.error) return <ErrorBanner error={detail.error} />;
+  if (detail.error) return <ErrorBanner error={detail.error} onRetry={() => detail.refetch()} retrying={detail.isFetching} />;
   const s = detail.data!;
   const u = s.usage;
   const planCurrency = s.plan?.currency ?? currency;
@@ -80,18 +80,36 @@ export function SubscriberDetailPage() {
             <button
               className={`btn ${s.is_disabled ? '' : 'btn-danger'}`}
               disabled={access.isPending || !settings.data?.jellyfin_configured}
-              onClick={() => {
-                const verb = s.is_disabled ? 'enable' : 'disable';
-                if (window.confirm(`${verb === 'disable' ? 'Disable' : 'Enable'} ${s.name}'s Jellyfin account? They will ${verb === 'disable' ? 'no longer' : 'again'} be able to sign in.`)) {
-                  access.mutate(!s.is_disabled);
-                }
-              }}
+              onClick={() => (s.is_disabled ? access.mutate(false) : setConfirmDisable(true))}
             >
-              {s.is_disabled ? 'Enable Jellyfin access' : 'Disable Jellyfin access'}
+              {access.isPending && s.is_disabled && <div className="spinner" />}
+              {s.is_disabled ? 'Enable Jellyfin access' : 'Disable Jellyfin access…'}
             </button>
           )}
         </div>
       </div>
+
+      {confirmDisable && (
+        <ConfirmDialog
+          title={`Disable ${s.name}'s Jellyfin access?`}
+          confirmLabel="Disable access"
+          pending={access.isPending}
+          onConfirm={() => access.mutate(true)}
+          onClose={() => setConfirmDisable(false)}
+        >
+          <p>Anything {s.name} is watching stops now, every device they use is signed out, and they can't sign back in.</p>
+          {settings.data?.disable_message && (
+            <div className="quote">
+              <div className="small text-muted">They'll see this on screen</div>
+              <p>“{settings.data.disable_message}”</p>
+            </div>
+          )}
+          <p className="small text-muted">
+            You can turn access back on from this page at any time
+            {settings.data?.auto_reenable_on_payment ? ', and recording a payment restores it automatically.' : '.'}
+          </p>
+        </ConfirmDialog>
+      )}
 
       <div className="grid grid-3">
         <Card title="Subscription">
@@ -193,8 +211,8 @@ export function SubscriberDetailPage() {
       </div>
 
       <div className="grid grid-2">
-        <Card title="Payments" subtitle={`${s.payments.length} recorded`}>
-          {s.payments.length === 0 ? (
+        <Card title="Payments" subtitle={`${s.payments.filter((p) => !pendingDeletes.has(p.id)).length} recorded`}>
+          {s.payments.filter((p) => !pendingDeletes.has(p.id)).length === 0 ? (
             <EmptyState title="No payments yet" />
           ) : (
             <div className="table-wrap">
@@ -209,7 +227,9 @@ export function SubscriberDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {s.payments.map((p) => (
+                  {s.payments
+                    .filter((p) => !pendingDeletes.has(p.id))
+                    .map((p) => (
                     <tr key={p.id}>
                       <td>{dateShort(p.paid_at)}</td>
                       <td className="num strong">{money(p.amount, p.currency)}</td>
@@ -222,7 +242,8 @@ export function SubscriberDetailPage() {
                         <div className="actions">
                           <button
                             className="btn btn-ghost btn-sm"
-                            onClick={() => window.confirm('Delete this payment? The due date is not changed automatically.') && deletePayment.mutate(p.id)}
+                            onClick={() => deletePayment({ ...p, subscriber: s.id, subscriber_name: s.name })}
+                            aria-label={`Delete ${money(p.amount, p.currency)} payment from ${dateShort(p.paid_at)}`}
                           >
                             Delete
                           </button>
@@ -286,10 +307,20 @@ export function SubscriberDetailPage() {
           )}
         </Card>
 
-        <Card title="Recent plays" subtitle={activity.data?.tracearr.error ?? 'Live from Tracearr'}>
+        <Card title="Recent plays" subtitle="Live from Tracearr">
           {activity.isLoading ? (
             <Spinner />
-          ) : !activity.data?.tracearr.ok || activity.data.tracearr.history.length === 0 ? (
+          ) : activity.error ? (
+            <ErrorBanner error={activity.error} onRetry={() => activity.refetch()} retrying={activity.isFetching} />
+          ) : activity.data && !activity.data.tracearr.ok ? (
+            <Issue
+              message={activity.data.tracearr.error ?? "Couldn't load recent plays."}
+              kind={activity.data.tracearr.kind}
+              detail={activity.data.tracearr.detail}
+              onRetry={() => activity.refetch()}
+              retrying={activity.isFetching}
+            />
+          ) : !activity.data || activity.data.tracearr.history.length === 0 ? (
             <EmptyState title="No recent plays" />
           ) : (
             <div className="list">
@@ -318,10 +349,20 @@ export function SubscriberDetailPage() {
           )}
         </Card>
 
-        <Card title="Recent requests" subtitle={activity.data?.seerr.error ?? 'Live from Seerr'}>
+        <Card title="Recent requests" subtitle="Live from Seerr">
           {activity.isLoading ? (
             <Spinner />
-          ) : !activity.data?.seerr.ok || activity.data.seerr.requests.length === 0 ? (
+          ) : activity.error ? (
+            <EmptyState title="Not available right now" />
+          ) : activity.data && !activity.data.seerr.ok ? (
+            <Issue
+              message={activity.data.seerr.error ?? "Couldn't load recent requests."}
+              kind={activity.data.seerr.kind}
+              detail={activity.data.seerr.detail}
+              onRetry={() => activity.refetch()}
+              retrying={activity.isFetching}
+            />
+          ) : !activity.data || activity.data.seerr.requests.length === 0 ? (
             <EmptyState title="No recent requests" />
           ) : (
             <div className="list">

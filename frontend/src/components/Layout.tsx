@@ -39,6 +39,9 @@ const ICONS = {
   logout: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
   ),
+  more: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="12" r="1.25" /><circle cx="12" cy="12" r="1.25" /><circle cx="19" cy="12" r="1.25" /></svg>
+  ),
   sync: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
   ),
@@ -53,6 +56,11 @@ const NAV = [
   { to: '/reminders', label: 'Reminders', icon: ICONS.reminders },
   { to: '/settings', label: 'Settings', icon: ICONS.settings },
 ];
+
+/** Phone/tablet bottom bar: the four places Ed goes most, then "More" for the rest. */
+const TAB_PATHS = ['/', '/subscribers', '/payments', '/reminders'];
+const TABS = NAV.filter((n) => TAB_PATHS.includes(n.to)).map((n) => ({ ...n, short: n.to === '/' ? 'Home' : n.label }));
+const MORE = NAV.filter((n) => !TAB_PATHS.includes(n.to));
 
 const TITLES: Record<string, string> = {
   '/': 'Dashboard',
@@ -99,14 +107,78 @@ export function SyncButton() {
 
   return (
     <button
-      className="btn btn-sm"
+      className="btn btn-sm sync-btn"
       onClick={() => run.mutate()}
       disabled={running || run.isPending}
       title={status.data?.last_sync_at ? `Last sync ${relative(status.data.last_sync_at)}` : 'Never synced'}
+      aria-label={running ? 'Syncing' : 'Sync now'}
     >
       {running ? <div className="spinner" /> : ICONS.sync}
-      {running ? 'Syncing…' : 'Sync now'}
+      <span className="btn-label">{running ? 'Syncing…' : 'Sync now'}</span>
     </button>
+  );
+}
+
+function MoreSheet({
+  username,
+  theme,
+  onToggleTheme,
+  onLogout,
+  onClose,
+}: {
+  username: string | null;
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
+  onLogout: () => void;
+  onClose: () => void;
+}) {
+  const firstLink = React.useRef<HTMLAnchorElement>(null);
+  React.useEffect(() => {
+    firstLink.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="sheet-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="sheet" role="dialog" aria-modal="true" aria-label="More">
+        <div className="sheet-grip" aria-hidden />
+        <nav className="sheet-nav" aria-label="More pages">
+          {MORE.map((item, i) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              ref={i === 0 ? firstLink : undefined}
+              onClick={onClose}
+              className={({ isActive }) => `sheet-link ${isActive ? 'active' : ''}`}
+            >
+              {item.icon}
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+        <div className="sheet-account">
+          <Avatar name={username ?? '?'} />
+          <div className="who">
+            <div className="name">{username ?? '—'}</div>
+            <div className="sub">Administrator</div>
+          </div>
+        </div>
+        <div className="sheet-actions">
+          <button className="btn" onClick={onToggleTheme}>
+            {theme === 'dark' ? ICONS.sun : ICONS.moon}
+            {theme === 'dark' ? 'Light theme' : 'Dark theme'}
+          </button>
+          <button className="btn" onClick={onLogout}>
+            {ICONS.logout}
+            Sign out
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -117,6 +189,10 @@ export function Layout({ username, onLogout, children }: { username: string | nu
   const isDetail = location.pathname.startsWith('/subscribers/');
   const title = isDetail ? 'Subscriber' : (TITLES[base] ?? 'Tallyfin');
   const section = TITLES[base] ?? 'Tallyfin';
+  const [moreOpen, setMoreOpen] = React.useState(false);
+  const closeMore = React.useCallback(() => setMoreOpen(false), []);
+  const moreActive = MORE.some((m) => base === m.to);
+  React.useEffect(() => setMoreOpen(false), [location.pathname]);
 
   return (
     <div className="app">
@@ -162,7 +238,11 @@ export function Layout({ username, onLogout, children }: { username: string | nu
       </aside>
       <div className="main">
         <header className="topbar">
-          <h1>
+          <NavLink to="/" className={`topbar-logo ${isDetail ? 'mark-only' : ''}`} aria-label="Tallyfin home">
+            <Logo size={26} />
+            <Wordmark className="topbar-word" />
+          </NavLink>
+          <h1 className={isDetail ? '' : 'topbar-section'}>
             {isDetail ? (
               <>
                 <NavLink to="/subscribers" style={{ color: 'inherit', textDecoration: 'none' }}>
@@ -171,7 +251,10 @@ export function Layout({ username, onLogout, children }: { username: string | nu
                 / Subscriber
               </>
             ) : (
-              <>Tallyfin / {section}</>
+              <>
+                <span className="crumb-root">Tallyfin / </span>
+                {section}
+              </>
             )}
           </h1>
           <div className="topbar-actions">
@@ -183,6 +266,26 @@ export function Layout({ username, onLogout, children }: { username: string | nu
           {children}
         </main>
       </div>
+
+      <nav className="tabbar" aria-label="Main">
+        {TABS.map((item) => (
+          <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => `tab ${isActive ? 'active' : ''}`}>
+            {item.icon}
+            <span>{item.short}</span>
+          </NavLink>
+        ))}
+        <button
+          type="button"
+          className={`tab ${moreActive || moreOpen ? 'active' : ''}`}
+          onClick={() => setMoreOpen((o) => !o)}
+          aria-expanded={moreOpen}
+          aria-haspopup="dialog"
+        >
+          {ICONS.more}
+          <span>More</span>
+        </button>
+      </nav>
+      {moreOpen && <MoreSheet username={username} theme={theme} onToggleTheme={toggle} onLogout={onLogout} onClose={closeMore} />}
     </div>
   );
 }

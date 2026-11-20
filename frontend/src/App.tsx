@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
+import { Logo } from './components/Logo';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, UNAUTHORIZED_EVENT } from './lib/api';
 import type { AuthStatus } from './lib/types';
@@ -42,11 +43,11 @@ export default function App() {
     return (
       <div className="auth">
         <div className="card stack">
-          <h2>Cannot reach the backend</h2>
-          <ErrorBanner error={auth.error} />
-          <button className="btn" onClick={() => auth.refetch()}>
-            Retry
-          </button>
+          <div className="row" style={{ gap: 10 }}>
+            <Logo size={32} />
+            <h2>Tallyfin can't load</h2>
+          </div>
+          <ErrorBanner error={auth.error} onRetry={() => auth.refetch()} retrying={auth.isFetching} />
         </div>
       </div>
     );

@@ -16,6 +16,7 @@ class PlanSerializer(serializers.ModelSerializer):
     monthly_price = serializers.SerializerMethodField()
     duration_label = serializers.CharField(read_only=True)
     subscriber_count = serializers.IntegerField(read_only=True, default=0)
+    payment_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = Plan
@@ -32,6 +33,7 @@ class PlanSerializer(serializers.ModelSerializer):
             "is_active",
             "sort_order",
             "subscriber_count",
+            "payment_count",
             "created_at",
             "updated_at",
         ]

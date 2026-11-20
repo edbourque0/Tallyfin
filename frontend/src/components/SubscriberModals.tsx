@@ -6,13 +6,15 @@ import type { Payment, Plan, StatusOverride, Subscriber } from '../lib/types';
 import { ErrorBanner, Field, Modal, useToast } from './ui';
 
 export function invalidateSubscriberData(qc: ReturnType<typeof useQueryClient>, id?: number) {
-  qc.invalidateQueries({ queryKey: ['subscribers'] });
-  qc.invalidateQueries({ queryKey: ['dashboard'] });
-  qc.invalidateQueries({ queryKey: ['payments'] });
-  qc.invalidateQueries({ queryKey: ['profitability'] });
-  qc.invalidateQueries({ queryKey: ['reminders'] });
-  qc.invalidateQueries({ queryKey: ['plans'] });
-  if (id !== undefined) qc.invalidateQueries({ queryKey: ['subscriber', id] });
+  return Promise.all([
+    qc.invalidateQueries({ queryKey: ['subscribers'] }),
+    qc.invalidateQueries({ queryKey: ['dashboard'] }),
+    qc.invalidateQueries({ queryKey: ['payments'] }),
+    qc.invalidateQueries({ queryKey: ['profitability'] }),
+    qc.invalidateQueries({ queryKey: ['reminders'] }),
+    qc.invalidateQueries({ queryKey: ['plans'] }),
+    id !== undefined ? qc.invalidateQueries({ queryKey: ['subscriber', id] }) : Promise.resolve(),
+  ]);
 }
 
 export function SubscriptionModal({ subscriber, plans, onClose }: { subscriber: Subscriber; plans: Plan[]; onClose: () => void }) {
@@ -159,7 +161,7 @@ export function PaymentModal({ subscriber, currency, onClose }: { subscriber: Su
     onSuccess: (data) => {
       invalidateSubscriberData(qc, subscriber.id);
       toast(`Payment recorded. Next due ${dateShort(data.subscriber.next_payment_date)}.${data.access_restored ? ' Jellyfin access restored.' : ''}`, 'ok');
-      if (data.access_error) toast(`Could not restore Jellyfin access: ${data.access_error}`, 'error');
+      if (data.access_error) toast(`Payment recorded, but their Jellyfin access is still off. ${data.access_error}`, 'error');
       onClose();
     },
   });

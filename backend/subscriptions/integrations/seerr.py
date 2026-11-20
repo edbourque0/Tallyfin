@@ -23,7 +23,7 @@ class SeerrClient(BaseClient):
     def __init__(self, base_url: str, api_key: str):
         super().__init__(base_url)
         if not api_key:
-            raise IntegrationError(self.service, "API key is not configured")
+            raise IntegrationError(self.service, f"{self.service} isn't set up yet: add its API key in Settings.", kind="not_configured")
         self.session.headers.update({"X-Api-Key": api_key})
         self._title_cache: dict[str, str] = {}
 

@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { dateShort, dateTime, daysLabel, money } from '../lib/format';
 import type { EnforcementOverview, EnforcementResult, RemindersOverview } from '../lib/types';
-import { Banner, Card, EmptyState, ErrorBanner, Modal, Spinner, StatusBadge, useToast } from '../components/ui';
+import { Banner, Card, ConfirmDialog, EmptyState, ErrorBanner, Modal, Spinner, StatusBadge, useToast } from '../components/ui';
 
 interface RunResult {
   sent: number;
@@ -22,9 +22,12 @@ export function RemindersPage() {
   const [preview, setPreview] = useState<RunResult | null>(null);
   const query = useQuery({ queryKey: ['reminders'], queryFn: () => api.get<RemindersOverview>('/api/reminders/') });
   const enforcement = useQuery({ queryKey: ['enforcement'], queryFn: () => api.get<EnforcementOverview>('/api/enforcement/') });
+  const [confirmApply, setConfirmApply] = useState(false);
   const applyEnforcement = useMutation({
-    mutationFn: () => api.post<EnforcementResult>('/api/enforcement/', { dry_run: false }),
+    // Only the people shown in the confirmation are acted on, even if the list changed since.
+    mutationFn: (ids: number[]) => api.post<EnforcementResult>('/api/enforcement/', { dry_run: false, subscriber_ids: ids }),
     onSuccess: (result) => {
+      setConfirmApply(false);
       qc.invalidateQueries({ queryKey: ['enforcement'] });
       qc.invalidateQueries({ queryKey: ['subscribers'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
@@ -32,10 +35,16 @@ export function RemindersPage() {
         toast(result.skipped, 'error');
         return;
       }
-      const summary = `${result.disabled.length} disabled, ${result.enabled.length} restored${result.errors.length ? ` · ${result.errors.join('; ')}` : ''}`;
-      toast(summary, result.errors.length ? 'error' : 'ok');
+      const parts: string[] = [];
+      if (result.disabled.length) parts.push(`Disabled ${nameList(result.disabled.map((r) => r.name))}.`);
+      if (result.enabled.length) parts.push(`Restored ${nameList(result.enabled.map((r) => r.name))}.`);
+      parts.push(...result.errors);
+      toast(parts.join(' ') || 'Nothing changed.', result.errors.length ? 'error' : 'ok');
     },
-    onError: (err: Error) => toast(err.message, 'error'),
+    onError: (err: Error) => {
+      setConfirmApply(false);
+      toast(err.message, 'error');
+    },
   });
 
   const run = useMutation({
@@ -49,15 +58,30 @@ export function RemindersPage() {
       if (result.warning) toast(result.warning, 'error');
       else if (result.sent > 0) {
         const failed = Object.entries(result.channels ?? {}).filter(([, v]) => v !== 'ok');
-        toast(failed.length ? `Sent, but ${failed.map(([c, e]) => `${c}: ${e}`).join('; ')}` : `Reminder digest sent (${result.sent} subscribers)`, failed.length ? 'error' : 'ok');
+        toast(
+          failed.length
+            ? `Reminder digest sent, with problems: ${failed.map(([, e]) => e).join('. ')}.`
+            : `Reminder digest sent (${result.sent} subscribers).`,
+          failed.length ? 'error' : 'ok',
+        );
       } else toast('Nothing to send today', 'info');
     },
     onError: (err: Error) => toast(err.message, 'error'),
   });
 
   if (query.isLoading) return <Spinner label="Loading reminders…" />;
-  if (query.error) return <ErrorBanner error={query.error} />;
+  if (query.error) return <ErrorBanner error={query.error} onRetry={() => query.refetch()} retrying={query.isFetching} />;
   const d = query.data!;
+  const toDisable = enforcement.data?.pending_disable ?? [];
+  const toEnable = enforcement.data?.pending_enable ?? [];
+  const applyLabel =
+    toDisable.length && toEnable.length
+      ? `Apply ${toDisable.length + toEnable.length} changes`
+      : toDisable.length
+        ? `Disable ${toDisable.length} account${toDisable.length === 1 ? '' : 's'}`
+        : toEnable.length
+          ? `Restore ${toEnable.length} account${toEnable.length === 1 ? '' : 's'}`
+          : 'Nothing to apply';
 
   return (
     <div className="stack">
@@ -66,6 +90,60 @@ export function RemindersPage() {
         <Banner kind="warn">
           No notification channel configured: reminders are computed but cannot be delivered. <Link to="/settings">Add a channel in Settings</Link>.
         </Banner>
+      )}
+
+      {confirmApply && enforcement.data && (
+        <ConfirmDialog
+          title={toDisable.length ? `${applyLabel}?` : `Restore access for ${nameList(toEnable.map((p) => p.name))}?`}
+          confirmLabel={applyLabel}
+          tone={toDisable.length ? 'danger' : 'default'}
+          pending={applyEnforcement.isPending}
+          onConfirm={() => applyEnforcement.mutate([...toDisable, ...toEnable].map((p) => p.subscriber_id))}
+          onClose={() => setConfirmApply(false)}
+        >
+          {toDisable.length > 0 && (
+            <div className="stack" style={{ gap: 8 }}>
+              <p>
+                {toDisable.length === 1 ? 'This person loses' : 'These people lose'} access to Jellyfin now. Anything they're watching stops and every device is
+                signed out.
+              </p>
+              <ul className="confirm-people">
+                {toDisable.map((p) => (
+                  <li key={p.subscriber_id}>
+                    <span className="strong">{p.name}</span>
+                    <span className="small text-muted">{p.reason}</span>
+                  </li>
+                ))}
+              </ul>
+              {enforcement.data.disable_message && (
+                <div className="quote">
+                  <div className="small text-muted">They'll see this on screen</div>
+                  <p>“{enforcement.data.disable_message}”</p>
+                </div>
+              )}
+            </div>
+          )}
+          {toEnable.length > 0 && (
+            <div className="stack" style={{ gap: 8 }}>
+              <p>{toDisable.length ? 'Access comes back for:' : 'They can sign in to Jellyfin again right away.'}</p>
+              {toDisable.length > 0 && (
+                <ul className="confirm-people">
+                  {toEnable.map((p) => (
+                    <li key={p.subscriber_id}>
+                      <span className="strong">{p.name}</span>
+                      <span className="small text-muted">{p.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {toDisable.length > 0 && (
+            <p className="small text-muted">
+              You can turn anyone back on from their page{enforcement.data.reenable_on_payment ? ', and recording a payment restores access automatically' : ''}.
+            </p>
+          )}
+        </ConfirmDialog>
       )}
 
       <Card
@@ -83,15 +161,12 @@ export function RemindersPage() {
               Settings
             </Link>
             <button
-              className="btn btn-sm btn-primary"
-              onClick={() => applyEnforcement.mutate()}
-              disabled={
-                applyEnforcement.isPending ||
-                !enforcement.data?.jellyfin_configured ||
-                ((enforcement.data?.pending_disable.length ?? 0) === 0 && (enforcement.data?.pending_enable.length ?? 0) === 0)
-              }
+              className={`btn btn-sm ${toDisable.length ? 'btn-danger' : ''}`}
+              onClick={() => setConfirmApply(true)}
+              disabled={applyEnforcement.isPending || !enforcement.data?.jellyfin_configured || (toDisable.length === 0 && toEnable.length === 0)}
             >
-              Apply now
+              {applyLabel}
+              {toDisable.length + toEnable.length > 0 ? '…' : ''}
             </button>
           </div>
         }
@@ -297,4 +372,10 @@ export function RemindersPage() {
       )}
     </div>
   );
+}
+
+/** "Camille", "Camille and Jonathan", "Camille, Jonathan and Olivier". */
+function nameList(names: string[]): string {
+  if (names.length <= 1) return names.join('');
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }

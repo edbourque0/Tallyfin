@@ -1,30 +1,22 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { dateShort, money } from '../lib/format';
 import type { AppSettings, Payment } from '../lib/types';
-import { Card, EmptyState, ErrorBanner, Spinner, StatTile, useToast } from '../components/ui';
-import { invalidateSubscriberData } from '../components/SubscriberModals';
+import { Card, EmptyState, ErrorBanner, Spinner, StatTile } from '../components/ui';
+import { useDeletePayment, usePendingPaymentDeletes } from '../lib/undo';
 
 export function PaymentsPage() {
-  const qc = useQueryClient();
-  const { push: toast } = useToast();
   const [search, setSearch] = useState('');
   const payments = useQuery({ queryKey: ['payments'], queryFn: () => api.get<Payment[]>('/api/payments/') });
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<AppSettings>('/api/settings/') });
   const currency = settings.data?.currency ?? 'USD';
 
-  const remove = useMutation({
-    mutationFn: (id: number) => api.del(`/api/payments/${id}/`),
-    onSuccess: () => {
-      invalidateSubscriberData(qc);
-      toast('Payment deleted', 'ok');
-    },
-    onError: (err: Error) => toast(err.message, 'error'),
-  });
+  const deletePayment = useDeletePayment();
+  const pendingDeletes = usePendingPaymentDeletes();
 
-  const list = payments.data ?? [];
+  const list = useMemo(() => (payments.data ?? []).filter((p) => !pendingDeletes.has(p.id)), [payments.data, pendingDeletes]);
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return q ? list.filter((p) => p.subscriber_name.toLowerCase().includes(q) || (p.note ?? '').toLowerCase().includes(q)) : list;
@@ -47,7 +39,7 @@ export function PaymentsPage() {
   }, [list]);
 
   if (payments.isLoading) return <Spinner label="Loading payments…" />;
-  if (payments.error) return <ErrorBanner error={payments.error} />;
+  if (payments.error) return <ErrorBanner error={payments.error} onRetry={() => payments.refetch()} retrying={payments.isFetching} />;
 
   return (
     <div className="stack">
@@ -93,7 +85,7 @@ export function PaymentsPage() {
                   <td className="small text-2">{p.note}</td>
                   <td>
                     <div className="actions">
-                      <button className="btn btn-ghost btn-sm" onClick={() => window.confirm('Delete this payment?') && remove.mutate(p.id)}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => deletePayment(p)} aria-label={`Delete ${money(p.amount, p.currency)} payment from ${p.subscriber_name}`}>
                         Delete
                       </button>
                     </div>

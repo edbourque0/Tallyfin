@@ -13,6 +13,7 @@ export interface Plan {
   is_active: boolean;
   sort_order: number;
   subscriber_count: number;
+  payment_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -138,6 +139,7 @@ export interface EnforcementOverview {
   after_days: number;
   grace_days: number;
   reenable_on_payment: boolean;
+  disable_message: string;
   jellyfin_configured: boolean;
   pending_disable: { subscriber_id: number; name: string; reason: string }[];
   pending_enable: { subscriber_id: number; name: string; reason: string }[];
@@ -152,10 +154,16 @@ export interface EnforcementResult {
   errors: string[];
 }
 
+/** A failure reported by the backend for one outside service (Jellyfin, Tracearr, Seerr). */
+export interface ServiceProblem {
+  error: string | null;
+  kind?: string | null;
+  detail?: string;
+}
+
 export interface Activity {
-  tracearr: {
+  tracearr: ServiceProblem & {
     ok: boolean;
-    error: string | null;
     history: {
       id: string;
       title: string;
@@ -174,9 +182,8 @@ export interface Activity {
       server_name: string;
     }[];
   };
-  seerr: {
+  seerr: ServiceProblem & {
     ok: boolean;
-    error: string | null;
     requests: {
       id: number;
       type: string;
@@ -197,7 +204,7 @@ export interface SyncRun {
   finished_at: string | null;
   ok: boolean;
   triggered_by: string;
-  result: Record<string, { ok: boolean; error?: string; skipped?: boolean; [key: string]: unknown }>;
+  result: Record<string, { ok: boolean; error?: string; kind?: string; detail?: string; skipped?: boolean; [key: string]: unknown }>;
 }
 
 export interface UpcomingItem {
@@ -239,7 +246,7 @@ export interface Dashboard {
   attention: Subscriber[];
   upcoming: UpcomingItem[];
   recent_payments: Payment[];
-  now_playing: { ok: boolean; streams: NowPlayingStream[]; error: string | null };
+  now_playing: ServiceProblem & { ok: boolean; streams: NowPlayingStream[] };
   last_sync: SyncRun | null;
   sync_running: boolean;
   configured: { jellyfin: boolean; tracearr: boolean; seerr: boolean; notifications: string[] };
